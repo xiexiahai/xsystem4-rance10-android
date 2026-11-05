@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">xsystem4</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_help">Help</string>
+    <string name="action_install_from_zip">Install from ZIP</string>
+    <string name="action_licenses">Open source licenses</string>
+    <string name="choose_a_file">Choose a file</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="error">Error</string>
+    <string name="install_dialog_title">Installing…</string>
+    <string name="install_progress">Extracting %s</string>
+    <string name="toast_no_GameName">%s has no \"GameName\" field.</string>
+    <string name="toast_no_ini">There is neither \"System40.ini\" nor \"AliceStart.ini\" in %s.</string>
+    <string name="uninstall_dialog_message">Uninstall \"%s\"?</string>
+    <string name="uninstall_dialog_title">Confirm</string>
+    <string name="zip_extraction_error">Failed to extract ZIP.</string>
+    <string name="zip_no_ini">There is neither \"System40.ini\" nor \"AliceStart.ini\" in the ZIP archive.</string>
+    <string name="usage">
+        <![CDATA[
+            <h1>How to install a game</h1>
+            <p>1. Connect the device to your computer with a USB cable.</p>
+            <p>2. On the device, tap the &quot;Charging this device via USB&quot; notification.</p>
+            <p>3. Under &quot;Use USB for,&quot; select &quot;File Transfer&quot;.</p>
+            <p>4. A file transfer window will open on your computer.</p>
+            <p>5. Copy the game folder (e.g. &quot;Sengoku Rance&quot;) into
+                  <tt>Android/data/io.github.kichikuou.xsystem4/files/</tt>.</p>
+            <p>6. When you&apos;re done, disconnect the device from your computer.</p>
+            <p>7. Tap the menu button at the upper-right of this screen, and select &quot;Refresh&quot;.</p>
+        ]]>
+    </string>
+</resources>

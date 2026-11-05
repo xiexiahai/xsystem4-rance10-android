@@ -1,0 +1,13 @@
+prefix=R:/src/xsystem4-android-codex/build/arm64-v8a/stage
+exec_prefix=${prefix}
+libdir=R:/src/xsystem4-android-codex/build/arm64-v8a/stage/lib
+includedir=R:/src/xsystem4-android-codex/build/arm64-v8a/stage/include
+
+Name: sndfile
+Description: A library for reading and writing audio files
+Requires:
+Requires.private: ogg vorbis vorbisenc 
+Version: 1.2.2
+Libs: -L${libdir} -lsndfile
+Libs.private: 
+Cflags: -I${includedir}

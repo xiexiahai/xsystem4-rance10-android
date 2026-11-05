@@ -1,0 +1,757 @@
+/* Copyright (C) 2019 Nunuhara Cabbage <nunuhara@haniwa.technology>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://gnu.org/licenses/>.
+ */
+
+#ifndef SYSTEM4_PARTS_INTERNAL_H
+#define SYSTEM4_PARTS_INTERNAL_H
+
+#include <cglm/types.h>
+#include "gfx/gfx.h"
+#include "gfx/font.h"
+#include "queue.h"
+#include "scene.h"
+#include "swf.h"
+#include "parts_widget.h"
+
+typedef struct cJSON cJSON;
+struct string;
+struct hash_table;
+struct iarray_reader;
+struct iarray_writer;
+struct parts_texture_park;
+struct parts_message_window;
+
+// NOTE: actual value is +1
+enum parts_state_type {
+	PARTS_STATE_DEFAULT = 0,
+	PARTS_STATE_HOVERED = 1,
+	PARTS_STATE_CLICKED = 2,
+#define PARTS_NR_STATES 3
+};
+
+enum parts_motion_type {
+	PARTS_MOTION_POS,
+	PARTS_MOTION_ALPHA,
+	PARTS_MOTION_CG,
+	PARTS_MOTION_HGAUGE_RATE,
+	PARTS_MOTION_VGAUGE_RATE,
+	PARTS_MOTION_NUMERAL_NUMBER,
+	PARTS_MOTION_MAG_X,
+	PARTS_MOTION_MAG_Y,
+	PARTS_MOTION_ROTATE_X,
+	PARTS_MOTION_ROTATE_Y,
+	PARTS_MOTION_ROTATE_Z,
+	PARTS_MOTION_VIBRATION_SIZE
+#define PARTS_NR_MOTION_TYPES (PARTS_MOTION_VIBRATION_SIZE+1)
+};
+
+union parts_motion_param {
+	int i;
+	float f;
+	struct {
+		int x;
+		int y;
+	};
+};
+
+struct parts_motion {
+	TAILQ_ENTRY(parts_motion) entry;
+	enum parts_motion_type type;
+	union parts_motion_param begin;
+	union parts_motion_param end;
+	int begin_time;
+	int end_time;
+};
+
+TAILQ_HEAD(parts_motion_list, parts_motion);
+
+struct sound_motion {
+	TAILQ_ENTRY(sound_motion) entry;
+	int begin_time;
+	int sound_no;
+	bool played;
+};
+
+struct parts_text_char {
+	Texture t;
+	char ch[4];
+	int advance;
+	Point off;
+};
+
+struct parts_text_line {
+	struct parts_text_char *chars;
+	int nr_chars;
+	unsigned height;
+	float width;
+};
+
+enum parts_type {
+	PARTS_UNINITIALIZED,
+	PARTS_CG,
+	PARTS_TEXT,
+	PARTS_ANIMATION,
+	PARTS_NUMERAL,
+	PARTS_HGAUGE,
+	PARTS_VGAUGE,
+	PARTS_CONSTRUCTION_PROCESS,
+	PARTS_FLASH,
+	PARTS_FLAT,
+	PARTS_MOVIE,
+	PARTS_RECT_DETECTION,
+	PARTS_LAYOUT_BOX,
+	PARTS_3DLAYER,
+	PARTS_MESSAGE_WINDOW,
+#define PARTS_NR_TYPES (PARTS_MESSAGE_WINDOW+1)
+};
+
+struct parts_common {
+	Texture texture;
+	int w, h;
+	Point origin_offset;
+	Rectangle hitbox;
+	Rectangle surface_area;
+};
+
+struct parts_cg {
+	struct parts_common common;
+	int no;
+	struct string *name;
+};
+
+struct parts_text {
+	struct parts_common common;
+	unsigned nr_lines;
+	struct parts_text_line *lines;
+	int line_space;
+	struct { float x; int y; } cursor;
+	struct text_style ts;
+};
+
+struct parts_animation {
+	struct parts_common common;
+	struct string *cg_name;
+	unsigned start_no;
+	unsigned nr_frames;
+	Texture *frames;
+	unsigned frame_time;
+	unsigned elapsed;
+	unsigned current_frame;
+};
+
+enum parts_numeral_font_type {
+	// each digit has a separate CG (only first CG number stored in `cg_no` member)
+	PARTS_NUMERAL_FONT_SEPARATE = 0,
+	// digits packed into single CG
+	PARTS_NUMERAL_FONT_COMBINED = 1,
+	// each digit has a separate CG (CG numbers stored in `width` member)
+	PARTS_NUMERAL_FONT_SEPARATE2 = 2,
+	// Text glyphs generated from a saved style (PACT display mode 2).
+	PARTS_NUMERAL_FONT_TEXT = 3,
+};
+
+struct parts_numeral_font {
+	enum parts_numeral_font_type type;
+	int cg_no;
+	/* Combined name or separate-digit format; never turn a name into a numeric route. */
+	struct string *cg_name;
+	int width[12];
+	Texture cg[12];
+	struct text_style text_style;
+	Point text_offset[12];
+	int text_advance[12];
+};
+
+struct parts_numeral {
+	struct parts_common common;
+	bool have_num;
+	int num;
+	int space;
+	int show_comma;
+	int length;
+	int font_no;
+};
+
+struct parts_gauge {
+	struct parts_common common;
+	Texture cg;
+	int cg_no;
+	struct string *cg_name;
+	float rate;
+	bool reverse;
+	float numerator, denominator;
+};
+
+// Serialized in save data. Do not reorder.
+enum parts_cp_op_type {
+	PARTS_CP_CREATE,
+	PARTS_CP_CREATE_PIXEL_ONLY,
+	PARTS_CP_CG,
+	PARTS_CP_FILL,
+	PARTS_CP_FILL_ALPHA_COLOR,
+	PARTS_CP_FILL_AMAP,
+	PARTS_CP_DRAW_RECT,
+	PARTS_CP_DRAW_CUT_CG,
+	PARTS_CP_COPY_CUT_CG,
+	PARTS_CP_DRAW_TEXT,
+	PARTS_CP_COPY_TEXT,
+	PARTS_CP_GRAY_FILTER,
+	PARTS_CP_FILL_WITH_ALPHA,
+	PARTS_CP_ALPHA_BLEND_CUT_CG,
+	PARTS_CP_ONLY_ALPHA_CUT_CG,
+	PARTS_CP_MULTIPLY_AMAP_GRADATION_UD,
+	PARTS_CP_ALPHA_BLEND_TEXT,
+#define PARTS_NR_CP_TYPES (PARTS_CP_ALPHA_BLEND_TEXT+1)
+};
+
+struct parts_cp_create {
+	int w;
+	int h;
+};
+
+struct parts_cp_cg {
+	struct string *name;
+};
+
+struct parts_cp_fill {
+	int x, y, w, h;
+	int r, g, b, a;
+};
+
+struct parts_cp_cut_cg {
+	struct string *cg_name;
+	int dx, dy, dw, dh;
+	int sx, sy, sw, sh;
+	int interp_type;
+};
+
+struct parts_cp_text {
+	struct string *text;
+	int x, y;
+	int line_space;
+	struct text_style style;
+};
+
+struct parts_cp_filter {
+	int x, y, w, h;
+	bool full_size;
+};
+struct parts_cp_amap_gradation {
+	int x, y, w, h, up_a, down_a;
+};
+
+struct parts_cp_op {
+	TAILQ_ENTRY(parts_cp_op) entry;
+	enum parts_cp_op_type type;
+	union {
+		struct parts_cp_create create;
+		struct parts_cp_cg cg;
+		struct parts_cp_fill fill;
+		struct parts_cp_cut_cg cut_cg;
+		struct parts_cp_text text;
+		struct parts_cp_filter filter;
+		struct parts_cp_amap_gradation amap_grad;
+	};
+};
+
+struct parts_construction_process {
+	struct parts_common common;
+	TAILQ_HEAD(, parts_cp_op) ops;
+};
+
+enum parts_flash_blend_mode {
+	PARTS_FLASH_BLEND_NORMAL0    = 0,
+	PARTS_FLASH_BLEND_NORMAL1    = 1,
+	PARTS_FLASH_BLEND_LAYER      = 2,
+	PARTS_FLASH_BLEND_MULTIPLY   = 3,
+	PARTS_FLASH_BLEND_SCREEN     = 4,
+	PARTS_FLASH_BLEND_LIGHTEN    = 5,
+	PARTS_FLASH_BLEND_DARKEN     = 6,
+	PARTS_FLASH_BLEND_DIFFERENCE = 7,
+	PARTS_FLASH_BLEND_ADD        = 8,
+	PARTS_FLASH_BLEND_SUBTRACT   = 9,
+	PARTS_FLASH_BLEND_INVERT     = 10,
+	PARTS_FLASH_BLEND_ALPHA      = 11,
+	PARTS_FLASH_BLEND_ERASE      = 12,
+	PARTS_FLASH_BLEND_OVERLAY    = 13,
+	PARTS_FLASH_BLEND_HARDLIGHT  = 14,
+};
+
+enum parts_draw_filter {
+	PARTS_DRAW_FILTER_NORMAL   = 0,
+	PARTS_DRAW_FILTER_ADDITIVE = 1,
+	PARTS_DRAW_FILTER_MULTIPLY = 2,
+	PARTS_DRAW_FILTER_SCREEN   = 3,
+};
+
+struct parts_flash_object {
+	TAILQ_ENTRY(parts_flash_object) entry;
+	uint16_t depth;
+	uint16_t character_id;
+	mat4 matrix;
+	struct swf_cxform_with_alpha color_transform;
+	enum parts_flash_blend_mode blend_mode;
+};
+
+struct parts_flash {
+	struct parts_common common;
+	struct string *name;
+	struct swf *swf;
+
+	struct swf_tag *tag;
+	bool has_ended;
+	bool stopped;
+	unsigned elapsed;
+	int current_frame;
+	struct hash_table *dictionary;
+	struct hash_table *bitmaps;  // bitmap character id -> struct texture *
+	struct hash_table *sprites;  // sprite character id -> struct parts_flash_object *
+	TAILQ_HEAD(, parts_flash_object) display_list;
+};
+
+struct flat_layer_state {
+	int current_frame;
+	bool stopped;
+	bool suppress_advance;
+	int jump_target;  // pending jump frame, -1 = none
+	// Per-timeline: last matched script key index for change detection
+	// (-2 = uninitialized, -1 = no match, >= 0 = key index)
+	int *last_script_keys;
+	// Per-timeline: child layer state (for TIMELINE libs), NULL otherwise
+	struct flat_layer_state **children;
+	size_t nr_timelines;
+};
+
+// Per-frame CG list for a STOP_MOTION library. lib_indices[k] is
+// the library index of the CG to display at frame k.
+struct flat_stop_motion_frames {
+	int *lib_indices;
+	int count;
+};
+
+struct parts_flat {
+	struct parts_common common;
+	struct string *name;
+	struct flat *flat;
+	bool stopped;
+	bool needs_advance;
+	double elapsed_frames;
+	float fps_rate;
+	int end_frame;
+	int pending_seek_delta;
+	struct flat_layer_state *root_state;
+	size_t nr_libraries;
+	Texture *textures;  // indexed by library index (only CG libs have valid textures)
+	struct string **cg_names;  // replacement names, NULL entries use embedded CGs
+	// Indexed by library index. Only entries for STOP_MOTION libraries have lib_indices populated.
+	struct flat_stop_motion_frames *stop_motion_frames;
+};
+
+struct parts_movie {
+	struct parts_common common;
+	int sprite_no;  // SACT sprite number used as movie render target
+	struct movie_context *decoder;
+	struct string *filename;
+	int sound_id;
+	int sound_group;
+	bool started;
+	bool playing;
+	bool ended;
+};
+
+enum parts_layout_type {
+	PARTS_LAYOUT_FREE       = 0,  // no automatic layout
+	PARTS_LAYOUT_VERTICAL   = 1,
+	PARTS_LAYOUT_HORIZONTAL = 2,
+};
+
+// In AliceSoft's PartsEngine implementation, LayoutBox is a component type
+// that is NOT per-state. We store it per-state for uniformity with other
+// component types, but parts_get_layout_box() and all code in layoutbox.c
+// operate on states[0] only. This is safe as long as game scripts never
+// convert a LayoutBox parts to/from another component type.
+struct parts_layout_box {
+	struct parts_common common;
+	enum parts_layout_type layout_type;
+	bool wrap;
+	int wrap_size;
+	int align;
+	int padding_top;
+	int padding_bottom;
+	int padding_left;
+	int padding_right;
+};
+
+struct parts_3dlayer {
+	struct parts_common common;
+	int plugin;    // ReignEngine plugin handle (-1 = none)
+	int sprite_no; // SACT sprite used as render target
+};
+
+struct parts_state {
+	enum parts_type type;
+	uint64_t async_ticket; // Transient request identity, never serialized.
+	union {
+		struct parts_common common;
+		struct parts_cg cg;
+		struct parts_text text;
+		struct parts_animation anim;
+		struct parts_numeral num;
+		struct parts_gauge gauge;
+		struct parts_construction_process cproc;
+		struct parts_flash flash;
+		struct parts_flat flat;
+		struct parts_movie movie;
+		struct parts_layout_box layout_box;
+		struct parts_3dlayer layer3d;
+		struct {struct parts_common common;struct parts_message_window *model;} window;
+	};
+};
+
+TAILQ_HEAD(parts_list, parts);
+
+struct parts_params {
+	int z;
+	Point pos;
+	bool show;
+	uint8_t alpha;
+	struct { float x, y; } scale;
+	struct { float x, y, z; } rotation;
+	SDL_Color add_color;
+	SDL_Color multiply_color;
+	int alpha_clipper_parts_no;
+};
+
+struct parts {
+	struct sprite sp;
+	struct string *comment;
+	struct string *user_component_name;
+	struct {struct string *key,*value;} *user_component_data;
+	int nr_user_component_data;
+	struct parts_widget *widget;
+	enum parts_state_type state;
+	struct parts_state states[PARTS_NR_STATES];
+	TAILQ_ENTRY(parts) parts_list_entry;
+	TAILQ_ENTRY(parts) child_list_entry;
+	TAILQ_ENTRY(parts) dirty_list_entry;
+	struct parts_list children;
+	struct parts_params local;
+	struct parts_params global;
+	struct parts *parent;
+	int dirty;
+	int no;
+	int delegate_index;
+	int sprite_deform;
+	bool clickable;
+	bool pass_cursor;
+	bool lock_input_state;
+	bool wheelable;
+	bool input_disabled;
+	bool want_save;
+	bool want_save_back_scene;
+	bool enable_speed_up;
+	bool is_back_scene; // detached replay: never registered in the live Parts table
+	bool has_focus;
+	int checkbox_show_link;
+	bool draggable;
+	int swipe_type;
+	int on_cursor_sound;
+	int normal_sound;
+	int on_click_sound;
+	int origin_mode;
+	int pending_parent;
+	int linked_to;
+	int linked_from;
+	bool is_hovered;
+	int hover_time;
+	int draw_filter;
+	bool message_window;
+	int margin_top;
+	int margin_bottom;
+	int margin_left;
+	int margin_right;
+	struct parts_motion_list motion;
+	int controller_no;
+    struct parts_texture_park *parked_textures; // Transient; preserve sprite as the first field.
+    bool position_is_ratio;
+    double raw_position_x,raw_position_y;
+    int scroll_pos_link[2],scroll_alpha_link;
+};
+
+#define PARTS_LIST_FOREACH(iter) TAILQ_FOREACH(iter, &parts_list, parts_list_entry)
+#define PARTS_LIST_FOREACH_REVERSE(iter) TAILQ_FOREACH_REVERSE(iter, &parts_list, parts_list, parts_list_entry)
+#define PARTS_FOREACH_CHILD(iter, parent) TAILQ_FOREACH(iter, &parent->children, child_list_entry)
+
+// parts.c
+extern struct parts_list parts_list;
+
+// Controller IDs survive insertion/removal elsewhere in the ordered stack.
+// The system overlay controller lives outside the stack.
+#define PARTS_CONTROLLER_STACK_MAX 10000
+#define PARTS_CONTROLLER_SYSTEM_OVERLAY PARTS_CONTROLLER_STACK_MAX
+
+struct parts_controller_stack {
+	int nr_controllers;
+	int active;  // controller ID or PARTS_CONTROLLER_SYSTEM_OVERLAY
+	int ids[PARTS_CONTROLLER_STACK_MAX];  // bottom to top
+	bool hidden[PARTS_CONTROLLER_STACK_MAX];
+	bool system_overlay_hidden;
+	int next_id;
+};
+extern struct parts_controller_stack ctrl_stack;
+extern bool parts_multi_controller;
+bool PE_controller_visible(int id);
+
+struct parts *parts_try_get(int parts_no);
+struct parts *parts_get(int parts_no);
+struct parts *parts_alloc_back_scene(int parts_no);
+void parts_free_back_scene(struct parts *parts);
+struct parts *parts_back_scene_get(int parts_no);
+struct parts_cg *parts_get_cg(struct parts *parts, int state);
+struct parts_text *parts_get_text(struct parts *parts, int state);
+struct parts_animation *parts_get_animation(struct parts *parts, int state);
+struct parts_numeral *parts_get_numeral(struct parts *parts, int state);
+struct parts_gauge *parts_get_hgauge(struct parts *parts, int state);
+struct parts_gauge *parts_get_vgauge(struct parts *parts, int state);
+struct parts_construction_process *parts_get_construction_process(struct parts *parts, int state);
+struct parts_flash *parts_get_flash(struct parts *parts, int state);
+struct parts_flat *parts_get_flat(struct parts *parts, int state);
+struct parts_movie *parts_get_movie(struct parts *parts, int state);
+struct parts_layout_box *parts_get_layout_box(struct parts *parts);
+struct parts_3dlayer *parts_get_3dlayer(struct parts *parts, int state);
+void parts_set_pos(struct parts *parts, Point pos);
+bool parts_set_ratio_position(struct parts *parts,bool enabled,double x,double y);
+void parts_set_global_pos(Point pos);
+void parts_set_dims(struct parts *parts, struct parts_common *common, int w, int h);
+void parts_set_scale_x(struct parts *parts, float mag);
+void parts_set_scale_y(struct parts *parts, float mag);
+void parts_set_rotation_z(struct parts *parts, float rot);
+void parts_set_alpha(struct parts *parts, int alpha);
+void parts_set_state(struct parts *parts, enum parts_state_type state);
+void parts_release(int parts_no);
+void parts_release_all(void);
+void parts_set_surface_area(struct parts *parts, struct parts_common *common, int x, int y, int w, int h);
+extern bool parts_message_window_show;
+extern float parts_message_window_mul_rate, parts_message_window_alpha_rate;
+
+extern struct parts_numeral_font *parts_numeral_fonts;
+extern int parts_nr_numeral_fonts;
+
+// for save.c
+void parts_list_resort(struct parts *parts);
+void parts_component_dirty(struct parts *parts);
+void parts_measure_layout(struct parts *parts);
+void parts_recalculate_hitbox(struct parts *parts);
+Point parts_child_origin(struct parts *parts);
+void parts_state_reset(struct parts_state *state, enum parts_type type);
+void parts_flat_async_cancel_state(struct parts_state *state);
+void parts_flat_async_content_changed(struct parts *parts, struct parts_common *common);
+void parts_flat_async_reset(void);
+void parts_flat_async_pump(void);
+bool parts_assets_async_flush(unsigned timeout_ms);
+bool parts_textures_any_parked(void);
+bool parts_message_windows_exist(void);
+void parts_message_window_free(struct parts_message_window *m);
+struct parts_message_window *parts_message_window_ensure(struct parts *p);
+bool parts_message_window_update(struct parts *p,int elapsed);
+bool parts_message_window_slots(struct parts_message_window *m,Texture **slots,size_t *used,size_t limit);
+void parts_textures_require_resident(struct parts *parts);
+void parts_textures_require_state(struct parts_state *state);
+void parts_textures_require_common(struct parts *parts, struct parts_common *common);
+void parts_textures_discard(struct parts *parts);
+bool parts_cg_set(struct parts *parts, struct parts_cg *cg, struct string *cg_name);
+void parts_cg_publish_state(struct parts *parts, int state, struct parts_cg *next);
+bool parts_cg_set_by_index(struct parts *parts, struct parts_cg *cg, int cg_no);
+void parts_text_append(struct parts *parts, struct parts_text *t, struct string *text);
+bool parts_animation_set_cg_by_index(struct parts *parts, struct parts_animation *anim,
+		int cg_no, int nr_frames, int frame_time);
+bool parts_animation_set_cg(struct parts *parts, struct parts_animation *anim,
+		struct string *cg_name, int start_no, int nr_frames, int frame_time);
+void parts_numeral_font_init(struct parts_numeral_font *font);
+void parts_numeral_font_fini(struct parts_numeral_font *font);
+bool parts_numeral_set_number(struct parts *parts, struct parts_numeral *num, int n);
+bool parts_numeral_text_style_valid(const struct text_style *style);
+bool parts_numeral_set_text_font(int parts_no, const struct text_style *style,
+		const struct parts_numeral *config, int state);
+bool parts_gauge_set_cg(struct parts *parts, struct parts_gauge *g, struct string *cg_name);
+bool parts_gauge_set_cg_by_index(struct parts *parts, struct parts_gauge *g, int cg_no);
+bool parts_hgauge_set_rate(struct parts *parts, struct parts_gauge *g, float rate);
+void parts_vgauge_set_rate(struct parts *parts, struct parts_gauge *g, float rate);
+bool parts_3dlayer_create_plugin(struct parts_3dlayer *l);
+
+// text.c
+void parts_text_free(struct parts_text *t);
+void parts_text_rerender(struct parts *parts, struct parts_text *t);
+struct string *parts_text_line_get(struct parts_text_line *line);
+struct string *parts_text_get(struct parts_text *t);
+
+// render.c
+void parts_render_init(void);
+void parts_render_update(void);
+void parts_engine_dirty(void);
+void parts_engine_clean(void);
+void parts_dirty(struct parts *parts);
+void parts_sprite_render(struct sprite *sp);
+void parts_render(struct parts *parts);
+bool parts_flat_hittest(struct parts *parts,int state,Point point,bool *hit);
+void parts_render_family(struct parts *parts);
+
+// motion.c
+void parts_clear_motion(struct parts *parts);
+void parts_add_motion(struct parts *parts, struct parts_motion *motion);
+
+// input.c
+extern bool parts_began_click;
+void parts_input_reset(void);
+void parts_input_reset_drag(struct parts *parts);
+
+// message.c
+enum parts_message_type {
+	PARTS_MSG_MOUSE_ENTER    = 1,
+	PARTS_MSG_MOUSE_MOVE     = 2,
+	PARTS_MSG_MOUSE_LEAVE    = 3,
+	PARTS_MSG_MOUSE_WHEEL    = 4,
+	PARTS_MSG_MOUSE_CLICK    = 5,
+	PARTS_MSG_MOUSE_ON       = 6,
+	PARTS_MSG_DRAG_BEGIN     = 7,
+	PARTS_MSG_DRAGGING       = 8,
+	PARTS_MSG_DRAG_END       = 9,
+	PARTS_MSG_DROP_ENTER     = 10,
+	PARTS_MSG_DROP_ON        = 11,
+	PARTS_MSG_DROPPED        = 12,
+	PARTS_MSG_DROP_LEAVE     = 13,
+	PARTS_MSG_KEY_TRIGGER    = 14,
+	PARTS_MSG_KEY_DOWN       = 15,
+	PARTS_MSG_KEY_PRESS      = 16,
+	PARTS_MSG_KEY_UP         = 17,
+	PARTS_MSG_FOCUS          = 18,
+	PARTS_MSG_LOST_FOCUS     = 19,
+	PARTS_MSG_SCROLL         = 20,
+	PARTS_MSG_CHANGED_TEXT   = 21,
+	PARTS_MSG_CHANGED_FLAG   = 22,
+	PARTS_MSG_SWIPE_BEGIN    = 23,
+	PARTS_MSG_SWIPING        = 24,
+	PARTS_MSG_SWIPE_END      = 25,
+	PARTS_MSG_LIST_SELECTED  = 26,
+	PARTS_MSG_FORM_CLOSING   = 27,
+};
+
+void parts_msg_push(struct parts* parts, int type, const char *fmt, ...);
+void parts_probe_schedule_refusal(int number);
+void parts_probe_update(void);
+void parts_msg_bind_delegate(int parts_no,int delegate_index);
+void parts_reconcile_message_window_activities(void);
+void parts_msg_release_parts(int parts_no);
+
+// construction.c
+void parts_cp_op_free(struct parts_cp_op *op);
+void parts_add_cp_op(struct parts_construction_process *cproc, struct parts_cp_op *op);
+bool parts_build_construction_process(struct parts *parts,
+		struct parts_construction_process *cproc);
+bool parts_clear_construction_process(struct parts_construction_process *cproc);
+struct cg *parts_construction_snapshot(struct parts *parts, int state, size_t remaining);
+bool parts_cp_amap_gradation_valid(int x, int y, int w, int h, int up_a, int down_a);
+
+// flash.c
+void parts_flash_free(struct parts_flash *f);
+bool parts_flash_load(struct parts *parts, struct parts_flash *f, struct string *filename);
+bool parts_flash_update(struct parts_flash *f, int passed_time);
+bool parts_flash_seek(struct parts_flash *f, int frame);
+
+// flat.c
+void parts_flat_free(struct parts_flat *f);
+bool parts_flat_load(struct parts *parts, struct parts_flat *f, struct string *filename);
+bool parts_flat_update(struct parts_flat *f, int passed_time);
+bool parts_flat_seek(struct parts_flat *f, int frame_no);
+void parts_flat_save_state(struct parts_flat *f, struct iarray_writer *w);
+bool parts_flat_load_state(struct parts_flat *f, struct iarray_reader *r);
+bool parts_flat_replace_cg(struct parts_flat *f, int index, struct string *name);
+int parts_flat_find_library(struct flat *fl, const char *name);
+int parts_flat_stop_motion_get_cg_lib(struct parts_flat *f, int sm_lib_idx, int local);
+
+// movie.c
+void parts_movie_free(struct parts_movie *movie);
+bool parts_movie_update(struct parts *parts, struct parts_movie *movie);
+
+struct flat_emitter;
+struct flat_key_data_graphic;
+
+struct flat_emitter_particle {
+	vec2 pos;          // emitter-space position (pixels)
+	vec2 scale;
+	vec3 rot;          // degrees (x, y, z)
+	float fade_alpha;  // 0-1.0
+	int cg_lib_idx;    // CG library index of the texture for this particle
+};
+
+// Per-key emitter properties after applying the emitter's inherit_* flags.
+struct flat_emitter_layer_effective {
+	vec2 pos;
+	bool reverse_lr, reverse_tb;
+	float alpha;
+	vec3 add_color;
+	vec3 mul_color;
+	int draw_filter;
+	bool use_scale;
+	bool use_rotation;
+	bool use_origin;
+};
+
+#define FLAT_MAX_ANCESTOR_DEPTH 32
+struct flat_key_stack {
+	const struct flat_key_data_graphic *keys[FLAT_MAX_ANCESTOR_DEPTH];
+	int count;
+};
+
+typedef void (*flat_emitter_particle_fn)(const struct flat_emitter_particle *p,
+		void *ud);
+void parts_flat_align_offset(int align, int w, int h, vec2 out);
+bool parts_flat_emitter_get_align_offset(struct parts_flat *f, int emitter_lib_idx, vec2 out);
+void parts_flat_foreach_emitter_particle_keys(struct parts_flat *f,int emitter_lib_idx,
+        const struct flat_key_data_graphic *cur,const struct flat_key_data_graphic *prev,
+        const struct flat_key_data_graphic *next,int birth_frame,int age,int frame_count,
+        flat_emitter_particle_fn fn,void *ud);
+void parts_flat_foreach_emitter_particle(struct parts_flat *f, int emitter_lib_idx,
+		const struct flat_key_data_graphic *keys,
+		int birth_frame, int age, int frame_count,
+		flat_emitter_particle_fn fn, void *ud);
+void parts_flat_build_layer_matrix(const struct flat_key_data_graphic *key,
+		vec2 pos,
+		bool use_rotation, bool use_scale, bool use_origin,
+		bool reverse_lr, bool reverse_tb,
+		mat4 out);
+void parts_flat_build_emitter_base_matrix(const struct flat_emitter *em,
+		const struct flat_key_stack *stack, mat4 out);
+void parts_flat_emitter_resolve_layer(
+		const struct flat_emitter *em,
+		const struct flat_key_data_graphic *key,
+		float parts_alpha, float layer_alpha,
+		struct flat_emitter_layer_effective *out);
+
+// layoutbox.c
+void parts_do_layout(struct parts *parts);
+
+// debug.c
+struct sprite;
+void parts_debug_init(void);
+cJSON *parts_engine_to_json(struct sprite *sp, bool verbose);
+cJSON *parts_sprite_to_json(struct sprite *sp, bool verbose);
+
+static inline bool parts_state_valid(int state)
+{
+	return state >= 0 && state <= 2;
+}
+
+#endif /* SYSTEM4_PARTS_INTERNAL_H */

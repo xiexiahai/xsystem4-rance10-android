@@ -1,0 +1,30 @@
+Third-party components
+======================
+
+This project is built on kichikuou/xsystem4 (GPL-2.0-or-later) and bundles or
+links the following components:
+
+  engine/subprojects/libsys4      GPL-2.0-or-later (same project family)
+  engine/subprojects/cglm.wrap    MIT (cglm)
+  SDL2 / SDL2_image / SDL2_mixer  zlib licence
+  libpng, zlib                    libpng licence / zlib licence
+  libjpeg-turbo                   BSD-3-Clause / IJG
+  libwebp                         BSD-3-Clause
+  freetype                        FreeType licence (FTL) or GPL-2.0
+  libffi                          MIT
+  libdeflate                      MIT
+  libogg, libvorbis               BSD-3-Clause
+  libsndfile                      LGPL-2.1-or-later
+
+Fonts packaged for the Android build:
+
+  HanaMinA (花園明朝)             HanaMin licence (see assets/licenses/HanaMinA)
+  Noto Sans CJK SC                SIL Open Font License 1.1
+  VL Gothic                       see assets/licenses/VL-Gothic-Regular
+
+Prebuilt ARM64 dependency libraries under android/deps were produced from the
+upstream projects above; their licences are reproduced in
+android/project/app/src/main/assets/licenses/.
+
+Rance 10 and all game assets are copyright AliceSoft and are NOT part of this
+repository. You must own the game to build a playable package.

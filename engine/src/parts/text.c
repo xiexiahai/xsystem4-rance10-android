@@ -1,0 +1,338 @@
+/* Copyright (C) 2019 Nunuhara Cabbage <nunuhara@haniwa.technology>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://gnu.org/licenses/>.
+ */
+
+#include <math.h>
+#include <string.h>
+
+#include "system4.h"
+#include "system4/string.h"
+#include "system4/utfsjis.h"
+
+#include "xsystem4.h"
+#include "parts_internal.h"
+
+static int extract_sjis_char(const char *src, char *dst)
+{
+	if (SJIS_2BYTE(*src)) {
+		dst[0] = src[0];
+		dst[1] = src[1];
+		dst[2] = '\0';
+		return 2;
+	}
+	dst[0] = src[0];
+	dst[1] = '\0';
+	return 1;
+}
+
+struct string *parts_text_line_get(struct parts_text_line *line)
+{
+	struct string *s = make_string("", 0);
+	for (int i = 0; i < line->nr_chars; i++) {
+		string_append_cstr(&s, line->chars[i].ch, strlen(line->chars[i].ch));
+	}
+	return s;
+}
+
+struct string *parts_text_get(struct parts_text *t)
+{
+	struct string *s = make_string("", 0);
+	for (int i = 0; i < t->nr_lines; i++) {
+		if (i > 0)
+			string_push_back(&s, '\n');
+		struct parts_text_line *line = &t->lines[i];
+		for (int i = 0; i < line->nr_chars; i++) {
+			string_append_cstr(&s, line->chars[i].ch, strlen(line->chars[i].ch));
+		}
+	}
+	return s;
+}
+
+static const char *parts_text_append_char(struct parts_text *t, const char *str)
+{
+	if (*str == '\n') {
+		t->lines = xrealloc_array(t->lines, t->nr_lines, t->nr_lines + 1,
+				sizeof(struct parts_text_line));
+		t->lines[t->nr_lines].height = text_style_height(&t->ts);
+		t->nr_lines++;
+		return str + 1;
+	}
+
+	struct parts_text_line *line = &t->lines[t->nr_lines - 1];
+	line->chars = xrealloc_array(line->chars, line->nr_chars, line->nr_chars + 1,
+			sizeof(struct parts_text_char));
+	struct parts_text_char *ch = &line->chars[line->nr_chars++];
+
+	int len = extract_sjis_char(str, ch->ch);
+	Rectangle canvas = gfx_text_char_texture_rect(&t->ts, ch->ch);
+	ch->off = (Point){-canvas.x, -canvas.y};
+	int height = text_style_height(&t->ts);
+	gfx_init_texture_rgba(&ch->t, canvas.w, canvas.h, (SDL_Color){0,0,0,0});
+	ch->advance = ceilf(gfx_render_textf(&ch->t, ch->off.x, ch->off.y, ch->ch, &t->ts, false));
+	line->width += ch->advance;
+	line->height = max(line->height, height);
+	return str + len;
+}
+
+void parts_text_append(struct parts *parts, struct parts_text *t, struct string *text)
+{
+	parts_textures_require_common(parts,&t->common);
+	parts_flat_async_content_changed(parts,&t->common);
+	if (!t->nr_lines) {
+		t->lines = xcalloc(1, sizeof(struct parts_text_line));
+		t->nr_lines = 1;
+	}
+
+	const char *msgp = text->text;
+	while (*msgp) {
+		msgp = parts_text_append_char(t, msgp);
+	}
+
+	// calculate dimensions of the text
+	float f_width = 0;
+	int height = 0;
+	for (int i = 0; i < t->nr_lines; i++) {
+		f_width = max(f_width, t->lines[i].width);
+		if (i > 0)
+			height += t->line_space;
+		height += t->lines[i].height;
+	}
+	int width = ceilf(f_width);
+	if (!width || !height)
+		return;
+
+	parts_set_dims(parts, &t->common, width, height);
+}
+
+void parts_text_free(struct parts_text *t)
+{
+	gfx_delete_texture(&t->common.texture);
+	for (int i = 0; i < t->nr_lines; i++) {
+		struct parts_text_line *line = &t->lines[i];
+		for (int i = 0; i < line->nr_chars; i++) {
+			gfx_delete_texture(&line->chars[i].t);
+		}
+		free(line->chars);
+	}
+	free(t->lines);
+}
+
+void parts_text_rerender(struct parts *parts, struct parts_text *t)
+{
+	parts_textures_require_common(parts,&t->common);
+	parts_flat_async_content_changed(parts,&t->common);
+	if (!t->nr_lines)
+		return;
+	struct string *text = parts_text_get(t);
+	parts_text_free(t);
+	t->ts.font_size = NULL; // clear cached font
+	t->lines = NULL;
+	t->nr_lines = 0;
+	parts_text_append(parts, t, text);
+	free_string(text);
+	parts_dirty(parts);
+}
+
+static void parts_text_clear(struct parts *parts, int state)
+{
+	struct parts_text *text = parts_get_text(parts, state);
+	parts_flat_async_content_changed(parts,&text->common);
+	parts_text_free(text);
+	text->lines = NULL;
+	text->nr_lines = 0;
+	text->cursor.x = 0;
+	text->cursor.y = 0;
+}
+
+bool PE_SetText(int parts_no, struct string *text, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	parts_text_clear(parts, state);
+	parts_text_append(parts, parts_get_text(parts, state), text);
+	return true;
+}
+
+struct string *PE_GetText(int parts_no, int state)
+{
+	if (!parts_state_valid(--state))
+		return NULL;
+
+	return parts_text_get(parts_get_text(parts_get(parts_no), state));
+}
+
+bool PE_AddPartsText(int parts_no, struct string *text, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	parts_text_append(parts, parts_get_text(parts, state), text);
+	return true;
+}
+
+bool PE_SetPartsTextSurfaceArea(int parts_no, int x, int y, int w, int h, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	parts_set_surface_area(parts, &text->common, x, y, w, h);
+	return true;
+}
+
+//bool PE_DeletePartsTopTextLine(int PartsNumber, int State);
+
+bool PE_SetFont(int parts_no, int type, int size, int r, int g, int b, float bold_weight, int edge_r, int edge_g, int edge_b, float edge_weight, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	text->ts.face = type;
+	text->ts.size = size;
+	text->ts.color = (SDL_Color) { r, g, b, 255 };
+	text->ts.weight = bold_weight * 1000;
+	text->ts.edge_color = (SDL_Color) { edge_r, edge_g, edge_b, 255 };
+	text_style_set_edge_width(&text->ts, edge_weight);
+	text->ts.bold_width = bold_weight;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontType(int parts_no, int type, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	if (text->ts.face == type)
+		return true;
+	text->ts.face = type;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontSize(int parts_no, int size, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	if (text->ts.size == size)
+		return true;
+	text->ts.size = size;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontColor(int parts_no, int r, int g, int b, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	SDL_Color color = { r, g, b, 255 };
+	if (!memcmp(&text->ts.color, &color, sizeof(SDL_Color)))
+		return true;
+	text->ts.color = color;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontBoldWeight(int parts_no, float bold_weight, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	if (text->ts.bold_width == bold_weight)
+		return true;
+	text->ts.bold_width = bold_weight;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontEdgeColor(int parts_no, int r, int g, int b, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	SDL_Color color = { r, g, b, 255 };
+	if (!memcmp(&text->ts.edge_color, &color, sizeof(SDL_Color)))
+		return true;
+	text->ts.edge_color = color;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetPartsFontEdgeWeight(int parts_no, float edge_weight, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	float old_left = text->ts.edge_left;
+	float old_up = text->ts.edge_up;
+	float old_right = text->ts.edge_right;
+	float old_down = text->ts.edge_down;
+	text_style_set_edge_width(&text->ts, edge_weight);
+	if (text->ts.edge_left == old_left && text->ts.edge_up == old_up &&
+	    text->ts.edge_right == old_right && text->ts.edge_down == old_down)
+		return true;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetTextCharSpace(int parts_no, int char_space, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	if (text->ts.font_spacing == char_space)
+		return true;
+	text->ts.font_spacing = char_space;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+bool PE_SetTextLineSpace(int parts_no, int line_space, int state)
+{
+	if (!parts_state_valid(--state))
+		return false;
+
+	struct parts *parts = parts_get(parts_no);
+	struct parts_text *text = parts_get_text(parts, state);
+	if (text->line_space == line_space)
+		return true;
+	text->line_space = line_space;
+	parts_text_rerender(parts, text);
+	return true;
+}
+
+
