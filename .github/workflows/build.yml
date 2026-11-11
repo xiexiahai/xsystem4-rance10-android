@@ -32,6 +32,11 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
           echo "PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> "$GITHUB_ENV"
 
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build flex bison
+
       - name: Build native engine (arm64-v8a)
         run: |
           cmake -S engine -B build-android-arm64 -G Ninja \
