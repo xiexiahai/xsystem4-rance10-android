@@ -33,15 +33,16 @@ class XSystem4Activity : SDLActivity() {
         // Offline build: online features stay disabled. Interactive game
         // confirmations remain enabled unless an explicit headless probe opts out.
         SDLActivity.nativeSetenv("XSYSTEM4_TEST_REJECT_NETWORK", "1")
+        Rance10Diagnostics.apply(intent)
         if (intent.getBooleanExtra("NO_DIALOG_DIAGNOSTIC", false))
             SDLActivity.nativeSetenv("XSYSTEM4_NO_DIALOG", "1")
         // Explicit diagnostic launch only; ordinary play does no timing/logging.
-        SDLActivity.nativeSetenv("XSYSTEM4_PERF_TRACE",
-            if (intent.getBooleanExtra("PERF_TRACE", false)) "1" else "0")
-        SDLActivity.nativeSetenv("XSYSTEM4_TRACE_GLYPH_CACHE",
-            if (intent.getBooleanExtra("GLYPH_CACHE_STATS", false)) "1" else "0")
-        SDLActivity.nativeSetenv("XSYSTEM4_PERF_WINDOW",
-            if (intent.getBooleanExtra("PERF_WINDOW", false)) "1" else "0")
+        if (intent.getBooleanExtra("PERF_TRACE", false))
+            SDLActivity.nativeSetenv("XSYSTEM4_PERF_TRACE", "1")
+        if (intent.getBooleanExtra("GLYPH_CACHE_STATS", false))
+            SDLActivity.nativeSetenv("XSYSTEM4_TRACE_GLYPH_CACHE", "1")
+        if (intent.getBooleanExtra("PERF_WINDOW", false))
+            SDLActivity.nativeSetenv("XSYSTEM4_PERF_WINDOW", "1")
         // Keep the dedicated Rance10 Chinese fallback inside its half-width cells.
         SDLActivity.nativeSetenv("XSYSTEM4_CJK_FIXED_CELLS", "1")
         if (intent.getBooleanExtra("PERF_TRACE", false)) {

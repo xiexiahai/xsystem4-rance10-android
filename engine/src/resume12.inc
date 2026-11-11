@@ -8,10 +8,11 @@
 #include "system4/little_endian.h"
 #include "resume12_types.inc"
 #include "r12_save_perf.h"
+#include "rance10_diagnostics.h"
 
 #define R12_FILE_LIMIT (256u*1024u*1024u)
 #define R12_HEAP_LIMIT (1024u*1024u)
-#define R12_WORD_LIMIT (16u*1024u*1024u)
+#define R12_WORD_LIMIT (64u*1024u*1024u)
 #define R12_STRING_LIMIT (16u*1024u*1024u)
 static const char *r12_stage;
 static int r12_problem_slot,r12_problem_type,r12_problem_value,r12_problem_word;
@@ -40,6 +41,7 @@ static bool r12_bool(const cJSON *j,const char *key,bool *out)
 {const cJSON *v=cJSON_GetObjectItemCaseSensitive(j,key);if(!cJSON_IsBool(v))return false;*out=cJSON_IsTrue(v);return true;}
 static cJSON *r12_words(const union vm_value *v,int n)
 {return cJSON_CreateIntArray_cb(n,get_number,(void*)v);}
+#include "r12_compact_words.inc"
 static void r12_append(cJSON *array,cJSON **tail,cJSON *item)
 {
     if(!item)return;
@@ -145,7 +147,7 @@ static bool r12_write_json_timed(const char *path,cJSON *j,struct r12_save_perf 
 }
 static bool r12_write_json(const char *path,cJSON *j)
 {return r12_write_json_timed(path,j,NULL);}
-static cJSON *r12_read_json(const char *path)
+static cJSON *r12_read_json_mode(const char *path,bool preserved_fields_only)
 {
     r12_reset_problem("read-open");
     char *full=savedir_path(path);FILE *f=file_open_utf8(full,"rb");free(full);if(!f)return NULL;
@@ -156,13 +158,22 @@ static cJSON *r12_read_json(const char *path)
     r12_stage="read-content";
     bool ok=fread(data,1,len,f)==(size_t)len;fclose(f);data[len]=0;
     if(!ok || memchr(data,0,len)){free(data);return NULL;}
-    r12_stage="read-json";const char *end=NULL;cJSON *j=cJSON_ParseWithOpts(data,&end,false);
+    r12_stage="read-json";const char *end=NULL;
+    static const char *const fields[]={"format","key","comments-hex"};
+    cJSON *j=preserved_fields_only?cJSON_ParseTopLevelFieldsWithOpts(data,&end,false,fields,3):cJSON_ParseWithOpts(data,&end,false);
     while(end && end<data+len && (*end==' '||*end=='\t'||*end=='\r'||*end=='\n'))end++;
     if(!j || end!=data+len){cJSON_Delete(j);j=NULL;}free(data);return j;
 }
+static cJSON *r12_read_json(const char *path)
+{return r12_read_json_mode(path,false);}
 static cJSON *r12_build_json(const char *key)
 {
-    if(heap_size>R12_HEAP_LIMIT || stack_ptr<2 || stack_ptr>4096 || call_stack_ptr<1 || call_stack_ptr>4096)return NULL;
+    size_t r12_words_seen=0;
+    if(heap_size>R12_HEAP_LIMIT || stack_ptr<2 || stack_ptr>4096 || call_stack_ptr<1 || call_stack_ptr>4096){
+        if (getenv("XSYSTEM4_TRACE_INPUT"))
+        NOTICE("[r12-save] build rejected heap=%u limit=%u stack=%d call_stack=%d",(unsigned)heap_size,(unsigned)R12_HEAP_LIMIT,stack_ptr,call_stack_ptr);
+        return NULL;
+    }
     int key_slot=stack[stack_ptr-2].i,path_slot=stack[stack_ptr-1].i;
     if(!string_index_valid(key_slot)||!string_index_valid(path_slot))return NULL;
     cJSON *j=cJSON_CreateObject(),*items=cJSON_CreateArray();
@@ -181,10 +192,10 @@ static cJSON *r12_build_json(const char *key)
             char *hex=r12_hex(heap[i].s);if(!hex)goto fail;cJSON_AddItemToArray(entry,cJSON_CreateString(hex));free(hex);continue;
         }
         struct page *p=heap[i].page;if(!p){cJSON_AddItemToArray(entry,cJSON_CreateNull());continue;}
-        if(p->nr_vars<0 || (words+=(unsigned)p->nr_vars)>R12_WORD_LIMIT)goto fail;
+        if(p->nr_vars<0 || (words+=(unsigned)p->nr_vars)>R12_WORD_LIMIT){r12_words_seen=words;goto fail;}
         cJSON *page=cJSON_CreateObject();cJSON_AddItemToArray(entry,page);
         cJSON_AddNumberToObject(page,"type",p->type);cJSON_AddNumberToObject(page,"index",p->index);
-        r12_put(page,"values",r12_words(p->values,p->nr_vars));
+        r12_put(page,"values",r12_compact_words(p->values,p->nr_vars));
         if(p->type==ARRAY_PAGE) {
             cJSON_AddNumberToObject(page,"rank",p->array.rank);cJSON_AddNumberToObject(page,"struct-type",p->array.struct_type);
             cJSON *t=p->element_type?r12_type_encode(p->element_type):cJSON_CreateNull();if(!t)goto fail;r12_put(page,"element",t);
@@ -205,7 +216,11 @@ static cJSON *r12_build_json(const char *key)
     }
     if(!cJSON_GetObjectItemCaseSensitive(j,"frames") || cJSON_GetArraySize(frames)!=call_stack_ptr)goto fail;
     return j;
-fail:cJSON_Delete(j);return NULL;
+fail:
+    if (getenv("XSYSTEM4_TRACE_INPUT"))
+    NOTICE("[r12-save] build failed heap=%u words=%zu limit=%u stack=%d call_stack=%d",
+        (unsigned)heap_size,(unsigned)(words?words:r12_words_seen),(unsigned)R12_WORD_LIMIT,stack_ptr,call_stack_ptr);
+    cJSON_Delete(j);return NULL;
 }
 static bool r12_live(struct r12_image *c,int slot)
 {return slot>=0 && (size_t)slot<c->cap && c->heap[slot].ref>0;}
@@ -222,11 +237,16 @@ static bool r12_prepare(const cJSON *j,const char *key,struct r12_image *c)
 static int r12_save_image(const char *key,const char *path)
 {
     struct r12_save_perf perf;r12_save_perf_begin(&perf);
+    Uint32 save_t0=SDL_GetTicks();
+    if(r10_diagnostic_enabled("XSYSTEM4_DIAG_SAVE"))
+        NOTICE("[r12-save-start] key=%s t_ms=%u heap_live_slots=%zu heap_capacity_slots=%zu",key,(unsigned)save_t0,heap_free_ptr,heap_size);
     /* Preserve comments before constructing the next full image. Large Parts
      * snapshots contain millions of words: keep only one complete JSON DOM
      * live at a time while retaining the atomic file replacement below. */
     cJSON *kept_comments=NULL;
-    cJSON *old=r12_read_json(path);
+    /* Parse every byte with the original grammar, but allocate a DOM only
+     * for the two fields needed here. Runtime loading still uses full DOM. */
+    cJSON *old=r12_read_json_mode(path,true);
     if(old) {
         const cJSON *old_key=cJSON_GetObjectItemCaseSensitive(old,"key"),*comments=cJSON_GetObjectItemCaseSensitive(old,"comments-hex");
         if(cJSON_IsString(old_key)&&!strcmp(old_key->valuestring,key)&&cJSON_IsArray(comments)) {
@@ -240,7 +260,7 @@ static int r12_save_image(const char *key,const char *path)
     }
     r12_save_perf_phase(&perf,R12_PERF_BUILD);
     cJSON *j=r12_build_json(key);
-    if(!j){cJSON_Delete(kept_comments);WARNING("R10VM1: runtime image exceeds supported limits");r12_save_perf_end(&perf,false);return 0;}
+    if(!j){cJSON_Delete(kept_comments);WARNING("R10VM1: runtime image exceeds supported limits (heap=%u)",(unsigned)heap_size);r12_save_perf_end(&perf,false);return 0;}
     if(kept_comments && !r12_put(j,"comments-hex",kept_comments)){cJSON_Delete(j);r12_save_perf_end(&perf,false);return 0;}
     r12_save_perf_phase(&perf,R12_PERF_PREPARE);
     struct r12_image *c=calloc(1,sizeof(*c));bool ok=c && r12_prepare(j,key,c);
@@ -250,6 +270,10 @@ static int r12_save_image(const char *key,const char *path)
     if(ok)ok=r12_write_json_timed(path,j,&perf);
     r12_save_perf_phase(&perf,R12_PERF_CLEANUP);
     cJSON_Delete(j);
+    size_t out_bytes=0;
+    if(ok){char *full=savedir_path(path);FILE *fp=full?fopen(full,"rb"):NULL;if(fp){if(!fseek(fp,0,SEEK_END)){long n=ftell(fp);if(n>0)out_bytes=(size_t)n;}fclose(fp);}free(full);}
+    if(r10_diagnostic_enabled("XSYSTEM4_DIAG_SAVE"))
+        NOTICE("[r12-save] key=%s ok=%d bytes=%zu heap_live_slots=%zu heap_capacity_slots=%zu t_ms=%u elapsed_ms=%u",key,ok,out_bytes,heap_free_ptr,heap_size,(unsigned)SDL_GetTicks(),(unsigned)(SDL_GetTicks()-save_t0));
     if(!ok)WARNING("R10VM1: image validation/write failed at %s slot=%d type=%d value=%d; previous file retained",r12_stage,r12_problem_slot,r12_problem_type,r12_problem_value);
     r12_save_perf_end(&perf,ok);
     return ok;
@@ -290,11 +314,12 @@ static bool r12_decode(const cJSON *j,const char *key,struct r12_image *c)
         if(kind==VM_STRING){h->s=r12_unhex(payload);if(!h->s)goto fail;continue;}
         if(cJSON_IsNull(payload))continue;
         int type,index;
+        int count;
         const cJSON *values=cJSON_GetObjectItemCaseSensitive(payload,"values");
-        if(!cJSON_IsObject(payload)||!r12_field(payload,"type",&type)||type<GLOBAL_PAGE||type>DELEGATE_PAGE||!r12_field(payload,"index",&index)||!cJSON_IsArray(values))goto fail;
-        int count=cJSON_GetArraySize(values);if((words+=(unsigned)count)>R12_WORD_LIMIT)goto fail;
+        if(!cJSON_IsObject(payload)||!r12_field(payload,"type",&type)||type<GLOBAL_PAGE||type>DELEGATE_PAGE||!r12_field(payload,"index",&index)||!r12_compact_word_count(values,&count))goto fail;
+        if((words+=(unsigned)count)>R12_WORD_LIMIT)goto fail;
         struct page *p=alloc_page(type,index,count);h->page=p;int k=0;const cJSON *v;
-        cJSON_ArrayForEach(v,values)if(!r12_int(v,&p->values[k++].i))goto fail;
+        if(!r12_compact_words_copy(values,p->values,count))goto fail;
         if(type==ARRAY_PAGE) {
             if(!r12_field(payload,"rank",&p->array.rank)||p->array.rank<1||p->array.rank>4||!r12_field(payload,"struct-type",&p->array.struct_type))goto fail;
             const cJSON *element=cJSON_GetObjectItemCaseSensitive(payload,"element");if(!element)goto fail;
@@ -404,7 +429,9 @@ static bool r12_validate(struct r12_image *c)
             vars=ain->functions[p->index].vars;
             if(p->local.parent<-1 || (p->local.parent>=0&&!r12_page(c,p->local.parent,LOCAL_PAGE)))goto fail;
             if(p->local_parent_owned!=(p->local.parent>=0))goto fail;
-            if(p->local.struct_ptr!=-1&&!r12_page(c,p->local.struct_ptr,STRUCT_PAGE))goto fail;
+            /* A retained closure LOCAL outlives its method receiver. This field
+             * is weak; active frame metadata is checked strictly below. */
+            if(p->local.struct_ptr<-1 || (p->local.struct_ptr>=0 && (size_t)p->local.struct_ptr>=c->cap))goto fail;
             int at=i;
             for(int depth=0;;depth++) {struct page *ancestor=r12_page(c,at,LOCAL_PAGE);if(!ancestor||ancestor->local.parent<0)break;if(depth>=1024)goto fail;at=ancestor->local.parent;}
         } else if(p->type==STRUCT_PAGE) {
@@ -447,6 +474,7 @@ static bool r12_validate(struct r12_image *c)
         struct function_call *f=&c->frames[i];struct page *local=r12_page(c,f->page_slot,LOCAL_PAGE);
         if(f->fno<0||f->fno>=ain->nr_functions||!local||local->index!=f->fno)goto fail;
         if(f->struct_page!=-1&&!r12_page(c,f->struct_page,STRUCT_PAGE))goto fail;
+        if(local->local.struct_ptr!=-1&&!r12_page(c,local->local.struct_ptr,STRUCT_PAGE))goto fail;
         if(f->call_address!=UINT32_MAX&&(f->call_address>=ain->code_size||!boundary[f->call_address]))goto fail;
         if(f->return_address!=UINT32_MAX&&(f->return_address>=ain->code_size||!boundary[f->return_address]))goto fail;
     }
@@ -479,7 +507,7 @@ static bool r12_comment_header(const cJSON *j,const char *key)
 }
 static struct page *r12_load_comments(const char *key,const char *path,int *success)
 {
-    *success=0;cJSON *j=r12_read_json(path);if(!j)return NULL;
+    *success=0;cJSON *j=r12_read_json_mode(path,true);if(!j)return NULL;
     const cJSON *comments=cJSON_GetObjectItemCaseSensitive(j,"comments-hex"),*v;
     if(!r12_comment_header(j,key)||!cJSON_IsArray(comments)||cJSON_GetArraySize(comments)>1024)goto fail;
     struct string *strings[1024]={0};int count=cJSON_GetArraySize(comments),n=0;

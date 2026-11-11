@@ -4,10 +4,12 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.io.File
 
 /** Normal play reopens the selected play profile; instrumented probes stay separate. */
@@ -78,9 +80,28 @@ class Rance10LauncherActivity : Activity() {
     private fun launchProbe(game: File, textureRoundtrip: Boolean = false, resumeProfile: Boolean = false, resumeRoundtrip: Boolean = false, textboxProbe: Boolean = false, perfTrace: Boolean = false) {
         if (launchedGame) return
         val preferences = getSharedPreferences("rance10-launch", MODE_PRIVATE)
+        val developmentSaves = if (BuildConfig.RANCE10_DEVELOPMENT) {
+            try {
+                val explicit = intent.hasExtra(DevelopmentSaveProfile.EXTRA)
+                val selected = DevelopmentSaveProfile.select(filesDir, explicit,
+                    intent.getStringExtra(DevelopmentSaveProfile.EXTRA),
+                    if (explicit) null else preferences.getString(DevelopmentSaveProfile.PREFERENCE, null))
+                if (explicit && !preferences.edit().putString(DevelopmentSaveProfile.PREFERENCE, selected.name).commit())
+                    throw java.io.IOException("Could not persist development lab selection")
+                selected
+            } catch (e: Exception) {
+                // Fail closed for invalid requests, stale profiles and persistence errors.
+                Log.w("Rance10Launcher", "Development lab profile rejected; game not started", e)
+                Toast.makeText(this, "开发存档目录无效或选择未能保存，游戏未启动。请重新选择有效的实验目录。", Toast.LENGTH_LONG).show()
+                finish()
+                return
+            }
+        } else null
         val profileKey = if (BuildConfig.RANCE10_CHEATS) "active_cheat_save_profile" else "active_save_profile"
         val exists = SaveProfile.DirectoryExists { File(filesDir, it).isDirectory }
-        val relative = if (textboxProbe) {
+        val relative = if (BuildConfig.RANCE10_DEVELOPMENT) {
+            "dev-saves/main"
+        } else if (textboxProbe) {
             if (BuildConfig.RANCE10_CHEATS) "cheat-textbox-probe-saves/v66" else "textbox-probe-saves/v66"
         } else if (BuildConfig.RANCE10_CHEATS) {
             SaveProfile.selectCheat(preferences.getString(profileKey, null),
@@ -89,12 +110,13 @@ class Rance10LauncherActivity : Activity() {
             SaveProfile.select(preferences.getString(profileKey, null),
                 if (resumeProfile) "resume-probe-saves/v66" else null, exists)
         }
-        val saves = File(filesDir, relative)
-        check(saves.isDirectory || saves.mkdirs())
-        if (!textboxProbe && !textureRoundtrip && !resumeRoundtrip)
+        val saves = developmentSaves ?: File(filesDir, relative)
+        check(saves.isDirectory || ((developmentSaves == null || saves.name == "main") && saves.mkdirs()))
+        if (!BuildConfig.RANCE10_DEVELOPMENT && !textboxProbe && !textureRoundtrip && !resumeRoundtrip)
             preferences.edit().putString(profileKey, relative).apply()
         launchedGame = true
         startActivity(Intent(this, XSystem4Activity::class.java).apply {
+            Rance10Diagnostics.forward(this@Rance10LauncherActivity, intent, this)
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra(XSystem4Activity.EXTRA_GAME_ROOT, game.absolutePath)
             putExtra(XSystem4Activity.EXTRA_SAVE_DIR, saves.absolutePath)

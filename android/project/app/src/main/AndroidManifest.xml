@@ -60,7 +60,7 @@
          An example Java class can be found in README-android.md
     -->
     <application android:label="${applicationLabel}"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:allowBackup="true" >
 
         <!-- Example of setting SDL hints from AndroidManifest.xml:
@@ -83,7 +83,7 @@
         <activity android:name=".BundledLauncherActivity"
             android:enabled="${bundledLauncherEnabled}"
             android:noHistory="true"
-            android:theme="@style/Rance10LauncherTheme"
+            android:theme="@style/BundledLauncherTransparent"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

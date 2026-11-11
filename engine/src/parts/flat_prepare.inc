@@ -228,6 +228,46 @@ void parts_flat_async_cancel_state(struct parts_state *state)
 	state->async_ticket=0;
 }
 
+/* The original caller may submit an entire mini-map before its next frame.
+ * Retain the 64-job/128MiB limits: publish completed requests and apply short
+ * bounded backpressure only to queue saturation. Only the classified CG credit refusal
+ * below may retry preparation once; other failures keep their refusal path. No
+ * Part/slot/texture pointer is held across this main-thread pump. */
+static bool parts_asset_wait_queue_room(void)
+{
+    Uint32 started = SDL_GetTicks();
+    while (parts_async_queue_full(flat_executor)) {
+        parts_flat_async_pump();
+        if (!parts_async_queue_full(flat_executor))
+            return true;
+        if ((Uint32)(SDL_GetTicks() - started) >= 250)
+            return false;
+        SDL_Delay(1);
+    }
+    return true;
+}
+
+/* Only a precise CG decode/staging-credit refusal reaches this pump. Never
+ * publish on the ordinary preparation path; keep intrinsic limits immediate. */
+static bool parts_asset_wait_prepare_room(size_t required)
+{
+	if (!flat_pending_bytes || !required || required>FLAT_PREPARE_BYTES) return false;
+	Uint32 started=SDL_GetTicks();
+	while (required>FLAT_PREPARE_BYTES-flat_pending_bytes) {
+		parts_flat_async_pump();
+		if (required<=FLAT_PREPARE_BYTES-flat_pending_bytes) return true;
+		if ((Uint32)(SDL_GetTicks()-started)>=250) return false;
+		SDL_Delay(1);
+	}
+	return true;
+}
+
+static bool parts_asset_async_owner_allowed(int number)
+{
+	struct parts *owner=parts_try_get(number);
+	return !owner || !owner->widget;
+}
+
 static bool parts_asset_enqueue(int number,int state,struct flat_prepared *p,struct parts_cg_prepared *cg, bool construction)
 {
 	size_t bytes=cg ? cg->bytes : p->bytes;
@@ -239,6 +279,7 @@ static bool parts_asset_enqueue(int number,int state,struct flat_prepared *p,str
 		if (!flat_executor) return false;
 		if (!flat_exit_registered) {atexit(parts_flat_async_reset);flat_exit_registered=true;}
 	}
+	if (!parts_asset_wait_queue_room()) return false;
 	struct flat_request *r=malloc(sizeof(*r));
 	if (!r) return false;
 	*r=(struct flat_request){.number=number,.state=state,.is_cg=cg!=NULL,.is_construction=construction,.bytes=bytes,.prepared=p,.cg_prepared=cg};
@@ -261,9 +302,16 @@ static bool flat_enqueue(int number,int state,struct flat_prepared *p)
 bool PE_SetPartsCGThread(int number,struct string *name,int state)
 {
 	if (!parts_state_valid(--state)) return false;
-	struct parts *owner=parts_try_get(number);
-	if (owner && owner->widget) return false;
+	if (!parts_asset_async_owner_allowed(number)) return false;
+	/* Clear detail even when a fixture overrides the real prepare helper. */
+	parts_cg_prepare_budget_required=0;
 	struct parts_cg_prepared *p=PARTS_CG_PREPARE_MAIN(name,FLAT_PREPARE_BYTES-flat_pending_bytes);
+	if (!p && parts_asset_wait_prepare_room(parts_cg_prepare_budget_required)) {
+		/* No Part/slot/texture pointer is held across the pump. */
+		if (!parts_asset_async_owner_allowed(number)) return false;
+		parts_cg_prepare_budget_required=0;
+		p=PARTS_CG_PREPARE_MAIN(name,FLAT_PREPARE_BYTES-flat_pending_bytes);
+	}
 	if (!p) return false;
 	if (parts_asset_enqueue(number,state,NULL,p,false)) return true;
 	parts_cg_prepared_free(p);return false;

@@ -38,6 +38,15 @@ static TAILQ_HEAD(listhead, sprite) sprite_list = TAILQ_HEAD_INITIALIZER(sprite_
 
 static Texture wp = {0};
 
+size_t scene_sprite_count(void)
+{
+	size_t n = 0;
+	struct sprite *sp;
+	TAILQ_FOREACH(sp, &sprite_list, entry)
+		n++;
+	return n;
+}
+
 void scene_register_sprite(struct sprite *sp)
 {
 	if (sp->in_scene)

@@ -264,6 +264,10 @@ typedef struct
     size_t offset;
     size_t depth; /* How deeply nested (in arrays/objects) is the input at the current offset. */
     internal_hooks hooks;
+    /* Opt-in top-level projection; NULL retains the original full-DOM path. */
+    const char *const *selected_fields;
+    size_t selected_field_count;
+    cJSON_bool discard;
 } parse_buffer;
 
 /* check if the given size is left to read in a given parse buffer (starting with 1) */
@@ -273,6 +277,39 @@ typedef struct
 #define cannot_access_at_index(buffer, index) (!can_access_at_index(buffer, index))
 /* get a pointer to the buffer at the position */
 #define buffer_at_offset(buffer) ((buffer)->content + (buffer)->offset)
+
+/* Only discard nested integers whose complete numeric token fits below the
+ * legacy 63-character strtod copy limit. All ambiguous/long tokens fall back.
+ * parse_value has already established an accessible '-' or digit here. */
+static cJSON_bool skip_discarded_integer(parse_buffer * const input_buffer)
+{
+    const unsigned char *input = buffer_at_offset(input_buffer);
+    const size_t available = input_buffer->length - input_buffer->offset;
+    size_t length = (input[0] == '-') ? 1 : 0;
+    const size_t digits_start = length;
+
+    while ((length < 63) && (length < available) &&
+           (input[length] >= '0') && (input[length] <= '9'))
+    {
+        length++;
+    }
+    if ((length == digits_start) || (length == 63))
+    {
+        return false;
+    }
+    if (length < available)
+    {
+        switch (input[length])
+        {
+            case '.': case 'e': case 'E': case '+': case '-':
+                return false;
+            default:
+                break;
+        }
+    }
+    input_buffer->offset += length;
+    return true;
+}
 
 /* Parse the input text to generate a number, and populate the result into item. */
 static cJSON_bool parse_number(cJSON * const item, parse_buffer * const input_buffer)
@@ -1026,9 +1063,10 @@ static parse_buffer *skip_utf8_bom(parse_buffer * const buffer)
 }
 
 /* Parse an object - create a new root, and populate. */
-CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return_parse_end, cJSON_bool require_null_terminated)
+static cJSON *parse_with_fields(const char *value, const char **return_parse_end,
+    cJSON_bool require_null_terminated, const char *const *fields, size_t count)
 {
-    parse_buffer buffer = { 0, 0, 0, 0, { 0, 0, 0 } };
+    parse_buffer buffer = { 0 };
     cJSON *item = NULL;
 
     /* reset error position */
@@ -1044,6 +1082,8 @@ CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return
     buffer.length = strlen((const char*)value) + sizeof("");
     buffer.offset = 0;
     buffer.hooks = global_hooks;
+    buffer.selected_fields = fields;
+    buffer.selected_field_count = count;
 
     item = cJSON_New_Item(&global_hooks);
     if (item == NULL) /* memory fail */
@@ -1051,7 +1091,10 @@ CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return
         goto fail;
     }
 
-    if (!parse_value(item, buffer_skip_whitespace(skip_utf8_bom(&buffer))))
+    buffer_skip_whitespace(skip_utf8_bom(&buffer));
+    /* Non-object roots remain valid, but cannot provide top-level metadata. */
+    buffer.discard = fields && (!can_access_at_index(&buffer, 0) || buffer_at_offset(&buffer)[0] != '{');
+    if (!parse_value(item, &buffer))
     {
         /* parse failure. ep is set. */
         goto fail;
@@ -1103,6 +1146,21 @@ fail:
     }
 
     return NULL;
+}
+
+CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return_parse_end, cJSON_bool require_null_terminated)
+{
+    return parse_with_fields(value, return_parse_end, require_null_terminated, NULL, 0);
+}
+
+CJSON_PUBLIC(cJSON *) cJSON_ParseTopLevelFieldsWithOpts(const char *value,
+    const char **return_parse_end, cJSON_bool require_null_terminated,
+    const char *const *fields, size_t count)
+{
+    size_t i;
+    if (!fields || count == 0 || count > 32) return NULL;
+    for (i = 0; i < count; i++) if (!fields[i]) return NULL;
+    return parse_with_fields(value, return_parse_end, require_null_terminated, fields, count);
 }
 
 /* Default options for cJSON_Parse */
@@ -1276,6 +1334,13 @@ static cJSON_bool parse_value(cJSON * const item, parse_buffer * const input_buf
     /* number */
     if (can_access_at_index(input_buffer, 0) && ((buffer_at_offset(input_buffer)[0] == '-') || ((buffer_at_offset(input_buffer)[0] >= '0') && (buffer_at_offset(input_buffer)[0] <= '9'))))
     {
+        /* A projected non-object numeric root remains observable at depth 0. */
+        if (input_buffer->discard && (input_buffer->depth > 0) &&
+            skip_discarded_integer(input_buffer))
+        {
+            item->type = cJSON_Number;
+            return true;
+        }
         return parse_number(item, input_buffer);
     }
     /* array */
@@ -1367,10 +1432,21 @@ static cJSON_bool print_value(const cJSON * const item, printbuffer * const outp
 }
 
 /* Build an array from input text. */
+/* A discarded value owns payload, never its stack-allocated node. */
+static void clear_discarded(cJSON *item, const internal_hooks *hooks)
+{
+    if (!(item->type & cJSON_IsReference) && item->child) cJSON_Delete(item->child);
+    if (!(item->type & cJSON_IsReference) && item->valuestring) hooks->deallocate(item->valuestring);
+    if (!(item->type & cJSON_StringIsConst) && item->string) hooks->deallocate(item->string);
+    memset(item, 0, sizeof(*item));
+}
+
 static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buffer)
 {
     cJSON *head = NULL; /* head of the linked list */
     cJSON *current_item = NULL;
+    cJSON scratch = { 0 };
+    const cJSON_bool discard = input_buffer->discard;
 
     if (input_buffer->depth >= CJSON_NESTING_LIMIT)
     {
@@ -1404,15 +1480,35 @@ static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buf
     /* loop through the comma separated array elements */
     do
     {
+        if (discard)
+        {
+            const size_t previous_offset = input_buffer->offset;
+            input_buffer->offset++;
+            buffer_skip_whitespace(input_buffer);
+            if (can_access_at_index(input_buffer, 0) &&
+                ((buffer_at_offset(input_buffer)[0] == '-') ||
+                 ((buffer_at_offset(input_buffer)[0] >= '0') &&
+                  (buffer_at_offset(input_buffer)[0] <= '9'))) &&
+                skip_discarded_integer(input_buffer))
+            {
+                buffer_skip_whitespace(input_buffer);
+                continue; /* Use the original comma/end-of-array checks. */
+            }
+            input_buffer->offset = previous_offset;
+        }
         /* allocate next item */
-        cJSON *new_item = cJSON_New_Item(&(input_buffer->hooks));
+        cJSON *new_item = discard ? &scratch : cJSON_New_Item(&(input_buffer->hooks));
         if (new_item == NULL)
         {
             goto fail; /* allocation failure */
         }
 
         /* attach next item to list */
-        if (head == NULL)
+        if (discard)
+        {
+            current_item = &scratch;
+        }
+        else if (head == NULL)
         {
             /* start the linked list */
             current_item = head = new_item;
@@ -1433,6 +1529,7 @@ static cJSON_bool parse_array(cJSON * const item, parse_buffer * const input_buf
             goto fail; /* failed to parse value */
         }
         buffer_skip_whitespace(input_buffer);
+        if (discard) clear_discarded(&scratch, &input_buffer->hooks);
     }
     while (can_access_at_index(input_buffer, 0) && (buffer_at_offset(input_buffer)[0] == ','));
 
@@ -1452,6 +1549,7 @@ success:
     return true;
 
 fail:
+    if (discard) clear_discarded(&scratch, &input_buffer->hooks);
     if (head != NULL)
     {
         cJSON_Delete(head);
@@ -1527,6 +1625,10 @@ static cJSON_bool parse_object(cJSON * const item, parse_buffer * const input_bu
 {
     cJSON *head = NULL; /* linked list head */
     cJSON *current_item = NULL;
+    cJSON scratch = { 0 };
+    const cJSON_bool discard = input_buffer->discard;
+    const cJSON_bool project_root = !discard && input_buffer->selected_fields && input_buffer->depth == 0;
+    uint32_t seen = 0;
 
     if (input_buffer->depth >= CJSON_NESTING_LIMIT)
     {
@@ -1559,14 +1661,18 @@ static cJSON_bool parse_object(cJSON * const item, parse_buffer * const input_bu
     do
     {
         /* allocate next item */
-        cJSON *new_item = cJSON_New_Item(&(input_buffer->hooks));
+        cJSON *new_item = discard ? &scratch : cJSON_New_Item(&(input_buffer->hooks));
         if (new_item == NULL)
         {
             goto fail; /* allocation failure */
         }
 
         /* attach next item to list */
-        if (head == NULL)
+        if (discard)
+        {
+            current_item = &scratch;
+        }
+        else if (head == NULL)
         {
             /* start the linked list */
             current_item = head = new_item;
@@ -1600,11 +1706,44 @@ static cJSON_bool parse_object(cJSON * const item, parse_buffer * const input_bu
         /* parse the value */
         input_buffer->offset++;
         buffer_skip_whitespace(input_buffer);
-        if (!parse_value(current_item, input_buffer))
+        cJSON_bool keep = true;
+        cJSON_bool value_ok;
+        cJSON_bool previous_discard = input_buffer->discard;
+        if (project_root)
+        {
+            size_t i;
+            keep = false;
+            for (i = 0; i < input_buffer->selected_field_count; i++)
+            {
+                if (!strcmp(current_item->string, input_buffer->selected_fields[i]))
+                {
+                    uint32_t bit = UINT32_C(1) << i;
+                    keep = !(seen & bit);
+                    seen |= bit; /* First match wins even if its type is wrong. */
+                    break;
+                }
+            }
+        }
+        input_buffer->discard = discard || !keep;
+        value_ok = parse_value(current_item, input_buffer);
+        input_buffer->discard = previous_discard;
+        if (!value_ok)
         {
             goto fail; /* failed to parse value */
         }
         buffer_skip_whitespace(input_buffer);
+        if (discard)
+        {
+            clear_discarded(&scratch, &input_buffer->hooks);
+        }
+        else if (!keep)
+        {
+            cJSON *previous = current_item->prev;
+            if (previous) previous->next = NULL; else head = NULL;
+            current_item->prev = NULL;
+            cJSON_Delete(current_item);
+            current_item = previous;
+        }
     }
     while (can_access_at_index(input_buffer, 0) && (buffer_at_offset(input_buffer)[0] == ','));
 
@@ -1623,6 +1762,7 @@ success:
     return true;
 
 fail:
+    if (discard) clear_discarded(&scratch, &input_buffer->hooks);
     if (head != NULL)
     {
         cJSON_Delete(head);

@@ -45,6 +45,9 @@ struct parts_cg_prepared {
 	size_t bytes;
 };
 
+/* Private credit-refusal detail; decoder/OOM failures never set it. */
+static size_t parts_cg_prepare_budget_required;
+
 /*
  * Main thread only. On success, source is kept, name is duplicated, pixels is
  * still empty, and bytes is the budgeted 2*RGBA (source + staging).
@@ -52,6 +55,7 @@ struct parts_cg_prepared {
 static struct parts_cg_prepared *parts_cg_prepare_main(struct string *name,
 		size_t remaining)
 {
+	parts_cg_prepare_budget_required = 0;
 	if (!name || name->size <= 0 || name->text[0] == '\0')
 		return NULL;
 	if (!strncmp(name->text, "<save>", 6))
@@ -101,6 +105,7 @@ static struct parts_cg_prepared *parts_cg_prepare_main(struct string *name,
 	/* Require encoded + 2*RGBA <= remaining without forming the sum. */
 	if (encoded_size > remaining ||
 			rgba > (remaining - encoded_size) / 2) {
+		parts_cg_prepare_budget_required = encoded_size + 2 * rgba;
 		free(encoded);
 		return NULL;
 	}

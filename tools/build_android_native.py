@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from native_build_paths import verified_cached_paths
 sys.stdout.reconfigure(encoding='utf-8')
 port=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--cheats',action='store_true');options=parser.parse_args()
@@ -16,9 +17,13 @@ _sdk=Path(os.environ.get('ANDROID_SDK_ROOT') or _tools/'sdk')
 _ndk=Path(os.environ.get('ANDROID_NDK_HOME') or _sdk/'ndk/26.3.11579264')
 cmake=os.environ.get('CMAKE') or str(_sdk/'cmake/3.22.1/bin/cmake.exe')
 build=port/('build-android-arm64-cheats' if options.cheats else 'build-android-arm64');stage=port/'android/deps/stage'
-configure=[cmake,'-S',str(port/'engine'),'-B',str(build),'-GNinja',
+try:
+    cached=verified_cached_paths(build/'CMakeCache.txt',port/'engine',build,_ndk/'build/cmake/android.toolchain.cmake')
+except ValueError as error:
+    raise SystemExit(str(error))
+configure=[cmake,'-S',cached['CMAKE_HOME_DIRECTORY'],'-B',cached['CMAKE_CACHEFILE_DIR'],'-GNinja',
  '-DCMAKE_BUILD_TYPE=RelWithDebInfo','-DCMAKE_MAKE_PROGRAM='+(os.environ.get('NINJA') or str(_msys2/'mingw64/bin/ninja.exe')),
- '-DCMAKE_TOOLCHAIN_FILE='+str(_ndk/'build/cmake/android.toolchain.cmake'),
+ '-DCMAKE_TOOLCHAIN_FILE='+cached['CMAKE_TOOLCHAIN_FILE'],
  '-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=21','-DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF',
  '-DCMAKE_STAGING_PREFIX='+str(stage),'-DCMAKE_FIND_ROOT_PATH='+str(stage),
  '-DCMAKE_MODULE_PATH='+str(port/'android/cmake'),'-DCMAKE_PROJECT_INCLUDE='+str(port/'tools/android-imports.cmake'),
@@ -28,7 +33,7 @@ configure=[cmake,'-S',str(port/'engine'),'-B',str(build),'-GNinja',
 configure=[argument.replace('\\','/') for argument in configure]
 logfile=port/('logs/android-cheats-native-build.txt' if options.cheats else 'logs/android-native-build.txt')
 with logfile.open('wb') as log:
- for command in (configure,[cmake,'--build',str(build),'--parallel','4']):
+ for command in (configure,[cmake,'--build',cached['CMAKE_CACHEFILE_DIR'],'--parallel','4']):
     result=subprocess.run(command,env=env,stdout=log,stderr=subprocess.STDOUT)
     if result.returncode:
         log.flush();print(logfile.read_text(encoding='utf-8',errors='replace')[-7000:]);raise SystemExit(result.returncode)

@@ -6,6 +6,7 @@
 #include "global_graph_file.h"
 #include "global_graph_program.h"
 #include "g12_comment_program_cache.h"
+#include "g12_save_perf.h"
 static cJSON *g12_hex_text(const char *text)
 {
     if(!text)return NULL;size_t n=strlen(text);if(n>G12_STRING_LIMIT)return NULL;
@@ -45,20 +46,32 @@ static bool g12_comment_base(const cJSON *payload,const char *key)
 bool write_group_save_comment(const char *key,const char *filename,const struct string *comment)
 {
     if(!comment || comment->size<0 || comment->size>65536)return false;
+    struct g12_save_perf perf;g12_perf_begin(&perf);
     uint8_t *raw=NULL;size_t size=0;cJSON *payload=NULL,*node=NULL,*hex=NULL;char *text=NULL;bool ok=false;
     if(!g12_read_envelope(filename,&raw,&size) || !(payload=g12_parse_json(raw,size)) || !g12_comment_base(payload,key))goto out;
+    /* cJSON owns the decoded strings; do not retain the decompressed input
+     * while building another text image and compressing it. */
+    free(raw);raw=NULL;
+    g12_perf_phase(&perf,G12_PERF_METADATA);
     node=g12_json_string(comment);if(!node)goto out;
     hex=cJSON_DetachItemFromObjectCaseSensitive(node,"bytes");if(!hex)goto out;
+    cJSON_Delete(node);node=NULL;
     cJSON_DeleteItemFromObjectCaseSensitive(payload,"comment");
     bool attached=g12_json_put(payload,"comment",hex);hex=NULL;if(!attached)goto out;
+    g12_perf_phase(&perf,G12_PERF_PRINT);
     text=cJSON_PrintUnformatted(payload);if(!text)goto out;
+    cJSON_Delete(payload);payload=NULL;
+    g12_perf_phase(&perf,G12_PERF_PERSIST);
     ok=g12_write_envelope(filename,(const uint8_t*)text,strlen(text));
-out:free(raw);cJSON_Delete(payload);cJSON_Delete(node);cJSON_Delete(hex);cJSON_free(text);return ok;
+out:g12_perf_phase(&perf,G12_PERF_CLEANUP);
+    free(raw);cJSON_Delete(payload);cJSON_Delete(node);cJSON_Delete(hex);cJSON_free(text);
+    g12_perf_end(&perf,"comment-write",ok,0,0,0);return ok;
 }
 bool read_group_save_comment(const char *key,const char *filename,struct string **comment)
 {
     if(!comment)return false;uint8_t *raw=NULL;size_t size=0;cJSON *payload=NULL;struct string *next=NULL;bool ok=false;
     if(!g12_read_envelope(filename,&raw,&size) || !(payload=g12_parse_json(raw,size)) || !g12_comment_base(payload,key))goto out;
+    free(raw);raw=NULL;
     const cJSON *hex=cJSON_GetObjectItemCaseSensitive(payload,"comment");
     if(!cJSON_IsString(hex) || !hex->valuestring || strlen(hex->valuestring)>131072 || !(next=g12_unhex(hex)))goto out;
     if(*comment)free_string(*comment);*comment=next;next=NULL;ok=true;
@@ -138,6 +151,7 @@ static int g12_save_globals(const char *key,const char *filename,const char *gro
     if(n_out)*n_out=0;
     if(!key || !filename || !*filename || !page_index_valid(0) || !heap[0].page ||
        heap[0].page->type!=GLOBAL_PAGE || heap[0].page->nr_vars!=ain->nr_globals)return 0;
+    struct g12_save_perf perf;g12_perf_begin(&perf);
     int *ids=NULL;size_t count=0;struct g12_root *roots=NULL,*encoded=NULL;
     const struct ain_type **types=NULL;struct g12_graph graph={0};struct g12_candidate candidate={0};
     int *external=NULL,binding_slots[G12_EXTERNAL_LIMIT];bool *allowed=NULL;
@@ -151,7 +165,7 @@ static int g12_save_globals(const char *key,const char *filename,const char *gro
     for(int i=0;i<ain->nr_globals;i++)allowed[i]=true;
     for(size_t i=0;i<count;i++)allowed[ids[i]]=false;
     for(size_t i=0;i<count;i++){types[i]=&ain->globals[ids[i]].type;roots[i]=(struct g12_root){types[i]->data,global_get(ids[i]).i};}
-    stage="collect";
+    stage="collect";g12_perf_phase(&perf,G12_PERF_COLLECT);
     while(!g12_collect_view_external(&graph,heap,heap_size,roots,count,external)) {
         int slot=graph.problem_slot;
         if(!graph.stage || strcmp(graph.stage,"external-weak") || nr_bindings==G12_EXTERNAL_LIMIT ||
@@ -159,14 +173,16 @@ static int g12_save_globals(const char *key,const char *filename,const char *gro
            !g12_find_external_binding(slot,allowed,&bindings[nr_bindings]))goto out;
         binding_slots[nr_bindings++]=slot;external[slot]=slot;g12_graph_free(&graph);
     }
-    stage="nodes";if(!(nodes=g12_nodes_encode_bound(&graph,bindings,binding_slots,nr_bindings)))goto out;
+    stage="nodes";g12_perf_phase(&perf,G12_PERF_NODES);
+    if(!(nodes=g12_nodes_encode_bound(&graph,bindings,binding_slots,nr_bindings)))goto out;
     for(size_t i=0;i<count;i++) {
         encoded[i].type=roots[i].type;
         if(!g12_word_encode(&graph,roots[i].type,roots[i].value,&encoded[i].value))goto out;
     }
-    stage="validate-candidate";
+    stage="validate-candidate";g12_perf_phase(&perf,G12_PERF_VALIDATE);
     if(!g12_nodes_decode_bound(nodes,&candidate,allowed) || !g12_candidate_validate(&candidate,encoded,count,types))goto out;
     g12_candidate_free(&candidate);
+    g12_perf_phase(&perf,G12_PERF_METADATA);
     stage="program";char program[64];if(!g12_program_id(ain,program))goto out;
     payload=cJSON_CreateObject();rows=cJSON_CreateArray();if(!payload || !rows)goto out;
     stage="metadata";
@@ -183,17 +199,23 @@ static int g12_save_globals(const char *key,const char *filename,const char *gro
     }
     bool attached=g12_json_put(payload,"roots",rows);rows=NULL;if(!attached)goto out;
     attached=g12_json_put(payload,"nodes",nodes);nodes=NULL;if(!attached)goto out;
-    stage="file";json=cJSON_PrintUnformatted(payload);if(!json)goto out;
+    stage="file";g12_perf_phase(&perf,G12_PERF_PRINT);
+    json=cJSON_PrintUnformatted(payload);if(!json)goto out;
+    cJSON_Delete(payload);payload=NULL;
+    g12_perf_phase(&perf,G12_PERF_PERSIST);
     ok=g12_write_envelope(filename,(const uint8_t*)json,strlen(json));
     if(ok)NOTICE("[global-graph] saved globals=%zu nodes=%zu bound-receivers=%zu",count,graph.count,nr_bindings);
 out:
+    g12_perf_phase(&perf,G12_PERF_CLEANUP);
     if(!ok)g12_external_diagnostic(&graph,group);
     if(!ok)WARNING("R10GS1 save rejected: %s (%s slot=%d type=%d value=%d)",stage,
         graph.stage?graph.stage:"not-collected",graph.problem_slot,graph.problem_type,graph.problem_value);
     if(ok && n_out)*n_out=count;
     free(ids);free(roots);free(encoded);free(types);free(external);free(allowed);free(bindings);
+    size_t saved_nodes=graph.count,saved_words=graph.words,saved_string_bytes=graph.string_bytes;
     g12_graph_free(&graph);g12_candidate_free(&candidate);
-    cJSON_Delete(payload);cJSON_Delete(nodes);cJSON_Delete(rows);cJSON_free(json);return ok;
+    cJSON_Delete(payload);cJSON_Delete(nodes);cJSON_Delete(rows);cJSON_free(json);
+    g12_perf_end(&perf,"group-save",ok,saved_nodes,saved_words,saved_string_bytes);return ok;
 }
 static int g12_load_globals(const char *key,const char *filename,const char *group,int *n_out)
 {

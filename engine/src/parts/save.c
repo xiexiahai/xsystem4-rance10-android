@@ -32,7 +32,11 @@
 #include "textbox_internal.h"
 #include "../hll/iarray.h"
 
-#define CURRENT_SAVE_VERSION 28
+#include <zlib.h>
+#include "parts_texture_pixels.h"
+#include "rance10_diagnostics.h"
+
+#define CURRENT_SAVE_VERSION 29
 
 static void save_parts_double(struct iarray_writer *w,double value)
 {
@@ -429,8 +433,83 @@ static struct parts_cp_op *load_parts_cp_op(struct iarray_reader *r, int version
 	return op;
 }
 
-static void save_parts_construction_process(struct iarray_writer *w,
-		struct parts_construction_process *cproc)
+
+#define CP_PIXELS_MAGIC 0x43505031
+#define CP_PIXELS_LIMIT (64u*1024u*1024u)
+static bool save_construction_pixels(struct iarray_writer *w,Texture *texture,struct parts *owner,bool needed)
+{
+ if(!needed){iarray_write(w,CP_PIXELS_MAGIC);iarray_write(w,0);return true;}
+ struct parts_texture_pixels image;
+ int got=parts_copy_texture_pixels(owner,texture,&image);
+ if(got<0)return false;
+ iarray_write(w,CP_PIXELS_MAGIC);iarray_write(w,got?1:2);
+ if(!got)return true;
+ size_t bytes=(size_t)image.w*image.h*4;
+ uLongf size=compressBound(bytes);uint8_t *compressed=malloc(size);
+ if(!compressed){free(image.rgba);return false;}
+ int status=compress2(compressed,&size,image.rgba,bytes,Z_BEST_SPEED);
+ if(status!=Z_OK||size>CP_PIXELS_LIMIT){free(compressed);free(image.rgba);return false;}
+ iarray_write(w,image.w);iarray_write(w,image.h);
+ iarray_write(w,image.min_filter);iarray_write(w,image.mag_filter);
+ iarray_write(w,image.wrap_s);iarray_write(w,image.wrap_t);
+ iarray_write(w,(int)bytes);iarray_write(w,(int)size);
+ iarray_write(w,(int)(uint32_t)crc32(0,image.rgba,bytes));
+ for(size_t i=0;i<size;i+=4) {
+  uint32_t word=0;for(unsigned j=0;j<4&&i+j<size;j++)word|=(uint32_t)compressed[i+j]<<(8*j);
+  iarray_write(w,(int32_t)word);
+ }
+ free(compressed);free(image.rgba);return true;
+}
+static bool cp_filter(int v,bool min)
+{
+ return v==GL_NEAREST||v==GL_LINEAR||(min&&v>=GL_NEAREST_MIPMAP_NEAREST&&v<=GL_LINEAR_MIPMAP_LINEAR);
+}
+static bool cp_wrap(int v){return v==GL_REPEAT||v==GL_CLAMP_TO_EDGE||v==GL_MIRRORED_REPEAT;}
+static int load_construction_pixels(struct iarray_reader *r,Texture *texture)
+{
+ if(iarray_read(r)!=CP_PIXELS_MAGIC)return -1;
+ int present=iarray_read(r);if(r->error||present<0||present>2)return -1;
+ if(!present||present==2)return present;
+ int w=iarray_read(r),h=iarray_read(r),min=iarray_read(r),mag=iarray_read(r);
+ int sw=iarray_read(r),tw=iarray_read(r),bytes=iarray_read(r),packed=iarray_read(r);
+ uint32_t crc=(uint32_t)iarray_read(r);
+ if(r->error||w<1||h<1||w>8192||h>8192||bytes<1||packed<1||
+    (size_t)w*h*4>CP_PIXELS_LIMIT||(size_t)bytes!=(size_t)w*h*4||
+    (unsigned)packed>CP_PIXELS_LIMIT||!cp_filter(min,true)||!cp_filter(mag,false)||
+    !cp_wrap(sw)||!cp_wrap(tw)||((size_t)packed+3)/4>r->size-r->pos)return -1;
+ uint8_t *data=malloc(packed),*raw=malloc(bytes);
+ if(!data||!raw){free(data);free(raw);return -1;}
+ for(int i=0;i<packed;i+=4) {
+  uint32_t word=(uint32_t)iarray_read(r);
+  for(int j=0;j<4&&i+j<packed;j++)data[i+j]=(uint8_t)(word>>(8*j));
+ }
+ z_stream stream={0};
+ stream.next_in=data;stream.avail_in=(uInt)packed;
+ stream.next_out=raw;stream.avail_out=(uInt)bytes;
+ bool ok=false;
+ if(!r->error&&inflateInit(&stream)==Z_OK) {
+  int status=inflate(&stream,Z_FINISH);
+  ok=status==Z_STREAM_END&&stream.total_in==(uLong)packed&&
+   stream.total_out==(uLong)bytes&&(uint32_t)crc32(0,raw,bytes)==crc;
+  inflateEnd(&stream);
+ }
+ free(data);
+ if(ok) {
+  gfx_delete_texture(texture);gfx_init_texture_with_pixels(texture,w,h,raw);
+  if(texture->handle) {
+   GLint binding;glGetIntegerv(GL_TEXTURE_BINDING_2D,&binding);glBindTexture(GL_TEXTURE_2D,texture->handle);
+   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,min);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,mag);
+   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,sw);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,tw);
+   if(min>=GL_NEAREST_MIPMAP_NEAREST&&min<=GL_LINEAR_MIPMAP_LINEAR)glGenerateMipmap(GL_TEXTURE_2D);
+   glBindTexture(GL_TEXTURE_2D,(GLuint)binding);
+  }
+  ok=texture->handle&&glGetError()==GL_NO_ERROR;
+ }
+ free(raw);return ok?1:-1;
+}
+
+static bool save_parts_construction_process(struct iarray_writer *w,
+		struct parts_construction_process *cproc,struct parts *owner,int version)
 {
 	unsigned ops_count_pos = iarray_writer_pos(w);
 	iarray_write(w, 0); // size of ops list
@@ -443,6 +522,7 @@ static void save_parts_construction_process(struct iarray_writer *w,
 	}
 
 	iarray_write_at(w, ops_count_pos, ops_count);
+	return version<29 || save_construction_pixels(w, &cproc->common.texture,owner,cproc->needs_pixel_snapshot);
 }
 
 static void load_parts_construction_process(struct iarray_reader *r, struct parts *parts,
@@ -463,7 +543,11 @@ static void load_parts_construction_process(struct iarray_reader *r, struct part
 		}
 		parts_add_cp_op(cproc, op);
 	}
-	if (r->error || !parts_build_construction_process(parts, cproc)) {
+	int mode = version >= 29 ? load_construction_pixels(r, &cproc->common.texture) : 0;
+	bool restored = mode >= 0;
+	if (restored && mode == 0) restored = parts_build_construction_process(parts, cproc);
+	cproc->needs_pixel_snapshot = mode > 0;
+	if (r->error || !restored) {
 		parts_clear_construction_process(cproc);
 		r->error = 1;
 	}
@@ -654,7 +738,7 @@ static void load_parts_layout_box(struct iarray_reader *r, struct parts_layout_b
 	lb->padding_right = iarray_read(r);
 }
 
-static void save_parts_state(struct iarray_writer *w, struct parts_state *state)
+static bool save_parts_state(struct iarray_writer *w, struct parts_state *state,struct parts *owner,int version)
 {
 	iarray_write(w, state->type);
 	iarray_write(w, state->common.w);
@@ -692,7 +776,7 @@ static void save_parts_state(struct iarray_writer *w, struct parts_state *state)
 		save_parts_gauge(w, &state->gauge, true);
 		break;
 	case PARTS_CONSTRUCTION_PROCESS:
-		save_parts_construction_process(w, &state->cproc);
+		if (!save_parts_construction_process(w, &state->cproc,owner,version)) return false;
 		break;
 	case PARTS_FLASH:
 		save_parts_flash(w, &state->flash);
@@ -704,6 +788,7 @@ static void save_parts_state(struct iarray_writer *w, struct parts_state *state)
 		save_parts_layout_box(w, &state->layout_box);
 		break;
 	}
+	return true;
 }
 
 static void load_parts_state(struct iarray_reader *r, struct parts *parts,
@@ -838,12 +923,12 @@ static struct parts_motion *load_parts_motion(struct iarray_reader *r)
 	return motion;
 }
 
-static void save_parts(struct iarray_writer *w, struct parts *parts)
+static bool save_parts(struct iarray_writer *w, struct parts *parts,int version)
 {
 	iarray_write(w, parts->no);
 	iarray_write(w, parts->state);
 	for (int i = 0; i < PARTS_NR_STATES; i++) {
-		save_parts_state(w, &parts->states[i]);
+		if (!save_parts_state(w, &parts->states[i],parts,version)) return false;
 	}
 
 	save_parts_params(w, &parts->local);
@@ -889,6 +974,7 @@ static void save_parts(struct iarray_writer *w, struct parts *parts)
     iarray_write(w,parts->widget && parts->widget->scroll_pos_assigned);
 	iarray_write(w, parts->enable_speed_up ? 1 : 0);
 	parts_scroll_links_save(w,parts);
+	return true;
 }
 
 static struct parts *load_parts(struct iarray_reader *r, int version, bool back_scene)
@@ -1112,16 +1198,35 @@ static bool preflight_named_resources(struct iarray_reader *r, int version)
 
 static bool parts_engine_save(struct page **buffer, bool save_hidden, bool back_scene)
 {
+	bool trace_save = r10_diagnostic_enabled("XSYSTEM4_DIAG_SAVE");
+	Uint32 start_ms = trace_save ? SDL_GetTicks() : 0;
 	if (PE_IsExistWorkerThread()) {
 		WARNING("Cannot save Parts while asynchronous resources are pending");
 		return false;
 	}
 	// get parts into clean state first
 	PE_UpdateComponent(0);
+	Uint32 updated_ms = trace_save ? SDL_GetTicks() : 0;
+
+	/* Keep the existing wire format unless a selected object has pixels
+	 * whose command history was discarded. Ordinary CG/retained-command
+	 * snapshots neither read back pixels nor require a format upgrade. */
+	int version = 28;
+	struct parts *candidate;
+	PARTS_LIST_FOREACH(candidate) {
+		if ((!save_hidden && (!candidate->global.show ||
+				!PE_controller_visible(candidate->controller_no))) ||
+				(back_scene ? !parts_save_back_scene_allowed(candidate) : !candidate->want_save))
+			continue;
+		for (int state = 0; state < PARTS_NR_STATES; state++)
+			if (candidate->states[state].type == PARTS_CONSTRUCTION_PROCESS &&
+					candidate->states[state].cproc.needs_pixel_snapshot)
+				version = 29;
+	}
 
 	struct iarray_writer w;
 	iarray_init_writer(&w, back_scene ? "XBS" : "XPE");
-	iarray_write(&w, CURRENT_SAVE_VERSION);
+	iarray_write(&w, version);
 	save_named_resources(&w, save_hidden, back_scene);
 	if (!back_scene) parts_activity_save(&w, save_hidden);
 	if (CURRENT_SAVE_VERSION > 1)
@@ -1138,6 +1243,7 @@ static bool parts_engine_save(struct page **buffer, bool save_hidden, bool back_
 
 	unsigned count_pos = iarray_writer_pos(&w);
 	iarray_write(&w, 0); // size of parts list
+	Uint32 header_ms = trace_save ? SDL_GetTicks() : 0;
 
 	unsigned count = 0;
 	struct parts *parts;
@@ -1146,11 +1252,16 @@ static bool parts_engine_save(struct page **buffer, bool save_hidden, bool back_
 			continue;
 		if (back_scene ? !parts_save_back_scene_allowed(parts) : !parts->want_save)
 			continue;
-		save_parts(&w, parts);
+		if (!save_parts(&w, parts,version)) {
+			iarray_free_writer(&w);
+			return false;
+		}
 		count++;
 	}
 
 	iarray_write_at(&w, count_pos, count);
+	unsigned words = iarray_writer_pos(&w);
+	Uint32 serialized_ms = trace_save ? SDL_GetTicks() : 0;
 
 	if (*buffer) {
 		delete_page_vars(*buffer);
@@ -1158,6 +1269,13 @@ static bool parts_engine_save(struct page **buffer, bool save_hidden, bool back_
 	}
 	*buffer = iarray_to_page(&w);;
 	iarray_free_writer(&w);
+	if (trace_save) {
+		Uint32 end_ms = SDL_GetTicks();
+		NOTICE("[parts-save-perf] back_scene=%d save_hidden=%d version=%d parts=%u words=%u update_ms=%u header_ms=%u serialize_ms=%u page_ms=%u total_ms=%u",
+			back_scene,save_hidden,version,count,words,(unsigned)(updated_ms-start_ms),
+			(unsigned)(header_ms-updated_ms),(unsigned)(serialized_ms-header_ms),
+			(unsigned)(end_ms-serialized_ms),(unsigned)(end_ms-start_ms));
+	}
 	return true;
 
 }
@@ -1478,8 +1596,10 @@ bool PE_Load(struct page **buffer)
 
 	if (r.error || (version >= 24 && r.pos != r.size)) goto failed;
 	if (activity_snapshot && !parts_activity_install(activity_snapshot)) goto failed;
+	bool restored_activities = activity_snapshot != NULL;
 	parts_activity_snapshot_free(activity_snapshot);
 	parts_engine_clean();
+	if (restored_activities) parts_activity_restore_reference_compat();
 	reconcile_rance03_message_windows();
 	reconcile_rance10_message_windows();
 	return true;

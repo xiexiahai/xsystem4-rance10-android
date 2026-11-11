@@ -15,6 +15,7 @@ bool parts_activity_read(struct iarray_reader *r, struct parts_activity_snapshot
 bool parts_activity_install(struct parts_activity_snapshot *snapshot);
 void parts_activity_snapshot_free(struct parts_activity_snapshot *snapshot);
 bool parts_activity_has_part(int number);
+void parts_activity_restore_reference_compat(void);
 
 void PE_ActivityReset(void);
 void PE_ActivityPartReleased(int number);

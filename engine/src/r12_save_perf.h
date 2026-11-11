@@ -2,6 +2,8 @@
 #ifndef R12_SAVE_PERF_H
 #define R12_SAVE_PERF_H
 
+#include "rance10_diagnostics.h"
+
 enum r12_save_phase {
     R12_PERF_OLD_COMMENTS, R12_PERF_BUILD, R12_PERF_PREPARE,
     R12_PERF_FREE_CANDIDATE, R12_PERF_PRINT, R12_PERF_PERSIST,
@@ -24,7 +26,11 @@ static void r12_save_perf_begin(struct r12_save_perf *sample)
         const char *value = getenv("XSYSTEM4_PERF_WINDOW");
         enabled = value && !strcmp(value, "1");
     }
-    if (!enabled || issued >= 8) return;
+    /* A battle-load regression can appear after many saves. The selected
+     * save diagnostic therefore keeps per-save aggregates for the session;
+     * the legacy short PERF_WINDOW probe remains capped at eight samples. */
+    bool continuous = r10_diagnostic_enabled("XSYSTEM4_DIAG_SAVE");
+    if ((!enabled && !continuous) || (!continuous && issued >= 8)) return;
     sample->enabled = true;
     sample->sample = ++issued;
     sample->phase = R12_PERF_OLD_COMMENTS;

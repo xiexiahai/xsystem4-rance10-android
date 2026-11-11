@@ -24,6 +24,10 @@ extern bool parts_began_click;
 #include <string.h>
 #include <limits.h>
 #include <SDL.h>
+#ifdef __ANDROID__
+#include <SDL_system.h>
+#include <jni.h>
+#endif
 #include "system4.h"
 #include "queue.h"
 #include "gfx/gfx.h"
@@ -336,20 +340,40 @@ static void mouse_event(SDL_MouseButtonEvent *e)
 #endif
 }
 
+#ifdef __ANDROID__
+/* Show/hide the on-screen Ctrl button owned by SDLActivity. */
+static void toggle_ctrl_overlay(void)
+{
+	JNIEnv *env = SDL_AndroidGetJNIEnv();
+	jobject activity = SDL_AndroidGetActivity();
+	if (!env || !activity)
+		return;
+	jclass cls = (*env)->GetObjectClass(env, activity);
+	if (cls) {
+		jmethodID mid = (*env)->GetMethodID(env, cls, "toggleCtrlOverlay", "()V");
+		if (mid)
+			(*env)->CallVoidMethod(env, activity, mid);
+		(*env)->DeleteLocalRef(env, cls);
+	}
+	(*env)->DeleteLocalRef(env, activity);
+}
+#else
+static void toggle_ctrl_overlay(void) {}
+#endif
+
 static void synthetic_mouse_event(SDL_MouseButtonEvent *e)
 {
 	if (e->state == SDL_PRESSED)
 		perf_window_mouse_press();
 	if (e->state == SDL_PRESSED) {
-		// Touch outside the viewport is treated as right-click.
+		// Touch outside the viewport toggles the on-screen Ctrl button.
 		SDL_Point p = { .x = e->x, .y = e->y };
 		if (SDL_PointInRect(&p, &sdl.viewport))
 			key_state[VK_LBUTTON] = true;
 		else
-			key_state[VK_RBUTTON] = true;
+			toggle_ctrl_overlay();
 	} else {
 		key_state[VK_LBUTTON] = false;
-		key_state[VK_RBUTTON] = false;
 	}
 }
 
@@ -698,13 +722,6 @@ static void fire_deferred_events(void)
 		synthetic_mouse_event(&deferred_synthetic_mouse_event);
 		deferred_synthetic_mouse_event.timestamp = 0;
 	}
-	// Long touch emulates pressing the Ctrl key.
-	if (long_touch_start_timestamp && !key_state[VK_CONTROL]
-			&& long_touch_start_timestamp + LONG_TOUCH_DURATION < now) {
-		cancel_mouse_samples();
-		key_state[VK_LBUTTON] = false;
-		key_state[VK_CONTROL] = true;
-	}
 
 #ifdef __ANDROID__
 	// Fire the deferred keyboard and text input events.
@@ -745,8 +762,6 @@ static void handle_window_event(SDL_Event *e)
 	case SDL_WINDOWEVENT_FOCUS_LOST:
 		keyboard_focus = false;
 		cancel_mouse_samples();
-		if (long_touch_start_timestamp)
-			key_state[VK_CONTROL] = false;
 		long_touch_start_timestamp = 0;
 		break;
 	case SDL_WINDOWEVENT_SIZE_CHANGED:
@@ -1162,7 +1177,6 @@ void handle_events(void)
 			break;
 		case SDL_FINGERUP:
 			long_touch_start_timestamp = 0;
-			key_state[VK_CONTROL] = false;
 			break;
 		case SDL_MULTIGESTURE:
 			if (e.mgesture.numFingers == 2) {

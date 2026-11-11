@@ -138,6 +138,21 @@ union vm_value global_get(int varno)
 	return heap[0].page->values[varno];
 }
 
+int vm_in_scenario_function(void)
+{
+	for (int i = call_stack_ptr - 1; i >= 0; i--) {
+		const unsigned char *n = (const unsigned char *)ain->functions[call_stack[i].fno].name;
+		if (n && n[0] == 't' && n[1] == 0xa3)
+			return 1;
+	}
+	return 0;
+}
+
+int vm_current_function_number(void)
+{
+	return call_stack_ptr > 0 ? call_stack[call_stack_ptr - 1].fno : -1;
+}
+
 size_t vm_active_frame_count(void)
 {return call_stack_ptr>=0 && call_stack_ptr<=4096?(size_t)call_stack_ptr:0;}
 int vm_active_frame_page(size_t index)
@@ -395,6 +410,14 @@ static void scenario_call(int slot)
  */
 #include "ain12_message.inc"
 
+
+static Uint32 trace_callchain_until;
+
+void vm_trace_callchain_for(unsigned ms)
+{
+	trace_callchain_until = SDL_GetTicks() + ms;
+}
+
 static int _function_call(int fno, int return_address)
 {
 	if(call_stack_ptr<0 || call_stack_ptr>=(int)(sizeof(call_stack)/sizeof(*call_stack))) {
@@ -403,6 +426,11 @@ static int _function_call(int fno, int return_address)
 	if (fno < 0 || fno >= ain->nr_functions)
 		VM_ERROR("Invalid function index: %d", fno);
 	struct ain_function *f = &ain->functions[fno];
+	if (trace_callchain_until && SDL_GetTicks() < trace_callchain_until) {
+		char *u = sjis2utf(f->name, 0);
+		sys_message("[cc]%*s%s\n", call_stack_ptr, "", u ? u : "?");
+		free(u);
+	}
 	if(getenv("XSYSTEM4_TRACE_SCENES") && strstr(f->name,"SceneStartScreen"))
 		fprintf(stderr,"[scene] %s time=%d\n",f->name,vm_time());
 	int slot = heap_alloc_slot(VM_PAGE);
@@ -458,6 +486,7 @@ static void method_call(int fno, int return_address)
 	r03mod_before_method();
 	r10mod_before_method();
 }
+
 
 static void vm_execute(void);
 
@@ -894,7 +923,8 @@ static void system_call(enum syscall_code code)
 	}
 	case SYS_EXIST_FUNC: { // system.ExistFunc(string szFuncName)
 		int funcname = stack_pop().i;
-		stack_push(ain_get_function(ain, heap_get_string(funcname)->text) > 0);
+		int found = ain_get_function(ain, heap_get_string(funcname)->text);
+		stack_push(found > 0);
 		heap_unref(funcname);
 		break;
 	}

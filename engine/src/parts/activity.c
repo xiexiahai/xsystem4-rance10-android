@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <stdlib.h>
+#include <SDL.h>
 #include <string.h>
 
 #include "system4.h"
@@ -9,6 +10,7 @@
 #include "system4/string.h"
 #include "system4/utfsjis.h"
 #include "parts.h"
+#include "rance10_diagnostics.h"
 #include "parts_activity.h"
 #include "vm/page.h"
 #include "parts_internal.h"
@@ -29,9 +31,11 @@ struct activity {
 	struct activity_part *parts;
 	int nr_parts;
 	int *end_keys, nr_end_keys;
+	unsigned seq;
 };
 
 static struct activity *activities;
+static unsigned activity_seq;
 
 static bool named(struct string *name)
 {
@@ -94,6 +98,7 @@ static void free_activity(struct activity *a)
 
 void PE_ActivityReset(void)
 {
+	PE_ClearMenuHiddenParts();
 	while (activities) {
 		struct activity *a = activities;
 		activities = a->next;
@@ -112,11 +117,43 @@ void PE_ActivityPartReleased(int number)
 			}
 }
 
+const char *PE_DebugPartName(int number)
+{
+    static char buf[256];
+    for (struct activity *a = activities; a; a = a->next)
+        for (int i = 0; i < a->nr_parts; i++)
+            if (a->parts[i].number == number) {
+                snprintf(buf, sizeof(buf), "%s/%s",
+                    a->name && a->name->text ? a->name->text : "(null)",
+                    a->parts[i].name && a->parts[i].name->text ? a->parts[i].name->text : "(null)");
+                return buf;
+            }
+    return "";
+}
+
 bool parts_activity_has_part(int number)
 {
 	for (struct activity *a = activities; a; a = a->next)
 		for (int i = 0; i < a->nr_parts; i++)
 			if (a->parts[i].number == number) return true;
+	return false;
+}
+
+
+int PE_CountActivities(void)
+{
+	int n = 0;
+	for (struct activity *a = activities; a; a = a->next)
+		n++;
+	return n;
+}
+
+bool PE_IsActivityOpen(const char *prefix)
+{
+	size_t n = strlen(prefix);
+	for (struct activity *a = activities; a; a = a->next)
+		if (a->name && a->name->text && !strncmp(a->name->text, prefix, n))
+			return true;
 	return false;
 }
 
@@ -144,30 +181,39 @@ static bool release_activity_by_text(const char *text)
 	return true;
 }
 
-static void release_stale_button_instances(struct string *name)
+/* Rance10 rebuilds MessageWindow01_talk and re-creates its hit buttons, but
+ * the Game/Component/TextButton instance created for the previous window is
+ * never released. Its parts stay on top of the rebuilt window and swallow the
+ * MENU click. Drop only prefixed button activities that are older than the
+ * window and live in the same controller as the window's parts; the activity
+ * name itself is raw SJIS, so match the ASCII prefix only. */
+static bool is_component_text_button(const char *name)
 {
 	static const char prefix[] = "Game/Component/TextButton/";
-	const char *text = name->text;
-	if (strncmp(text, prefix, sizeof(prefix) - 1))
+	return name && !strncmp(name, prefix, sizeof(prefix) - 1);
+}
+
+static void release_stale_window_buttons(int controller, unsigned window_seq)
+{
+	if (controller < 0)
 		return;
-	const char *colon = strrchr(text, ':');
-	if (!colon || colon == text)
-		return;
-	size_t base = (size_t)(colon - text);
 	for (struct activity *a = activities; a; a = a->next) {
-		if (!a->name || !a->name->text)
+		if (a->seq >= window_seq || !is_component_text_button(a->name->text))
 			continue;
-		const char *a_colon = strrchr(a->name->text, ':');
-		if (!a_colon)
+		bool same_controller = false;
+		for (int i = 0; i < a->nr_parts; i++) {
+			struct parts *p = parts_try_get(a->parts[i].number);
+			if (p && p->controller_no == controller) { same_controller = true; break; }
+		}
+		if (!same_controller)
 			continue;
-		if ((size_t)(a_colon - a->name->text) != base || strncmp(a->name->text, text, base))
-			continue;
-		char *stale = xstrdup(a->name->text);
+		char *text = xstrdup(a->name->text);
 		if (getenv("XSYSTEM4_TRACE_INPUT"))
-			sys_message("[activity] release-stale %s\n", stale);
-		release_activity_by_text(stale);
-		free(stale);
-		return; /* list changed; next create call re-scans */
+			sys_message("[activity] release-stale-window-button %s\n", text);
+		release_activity_by_text(text);
+		free(text);
+		release_stale_window_buttons(controller, window_seq);
+		return;
 	}
 }
 
@@ -182,6 +228,17 @@ bool PE_CreateActivity(struct string *name)
 	a->name = string_dup(name);
 	a->next = activities;
 	activities = a;
+	a->seq = ++activity_seq;
+	/* The window is visible again: bring back ADV hit layers that the
+	 * script erased while it was hidden (hide-window / menu / rebuild). */
+	if (!strncmp(a->name->text, "MessageWindow", 13))
+		PE_RestoreMenuHiddenParts();
+	if (!strncmp(a->name->text, "MessageWindow", 13) || strstr(a->name->text, "Quest"))
+		PE_SchedulePartsDump();
+	if (!strncmp(a->name->text, "Game/Battle", 11)) {
+		PE_LogActivityCreated(a->name->text);
+		PE_LogResourceUsage("battle-create");
+	}
 	return true;
 }
 
@@ -197,6 +254,9 @@ bool PE_AddActivityParts(struct string *name, struct string *parts_name, int num
 	a->parts[a->nr_parts++] = (struct activity_part) {
 		.name = string_dup(parts_name), .number = number
 	};
+	/* Stale-button release is disabled: the live button is created before
+	 * the window, so sequence order cannot distinguish it from the stale
+	 * instance. Kept for reference until a reliable discriminator exists. */
 	if (getenv("XSYSTEM4_TRACE_INPUT"))
 		sys_message("[activity] add %s/%s number=%d\n", a->name->text, parts_name->text, number);
 	return true;
@@ -306,6 +366,8 @@ bool PE_ReleaseActivity(struct string *name, struct page **delegates)
 	for (int i = 0; i < a->nr_parts; i++)
 		PE_ReleaseParts(a->parts[i].number);
 	free_activity(a);
+	if (named(name) && !strncmp(name->text, "Game/CommonMenu/CommonMenu", 26))
+		PE_RestoreMenuHiddenParts();
 	return true;
 }
 

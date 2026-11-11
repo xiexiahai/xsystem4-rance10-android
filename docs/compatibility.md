@@ -10,7 +10,7 @@ This fork targets two of those titles on Android (ARM64):
 | Title                    | Year | Upstream     | This fork                    |
 |--------------------------|------|--------------|------------------------------|
 | Rance 03                 | 2015 | Unsupported  | Runs (adapter build flag)    |
-| Rance 10                 | 2018 | Unsupported  | Runs; known UI issues below  |
+| Rance 10                 | 2018 | Unsupported  | Runs (1.0.4); known issues   |
 
 "Runs" means the game starts, plays the story and battles, and saves/loads.
 It does not mean every scene and every UI screen has been audited.
@@ -19,7 +19,9 @@ Known issues
 ------------
 
 Rance 10
-* Dialogue MENU: opens once, then stops responding after the window is rebuilt.
+* Long sessions on some devices: battle pre-loading gets progressively slower
+  and may crash/ANR. Under investigation.
+* Map route display may occasionally be missing after loading a save.
 * A texture-parking optimisation (off by default) caused stale redraws in the
   save list and dialogue; disabled in this tree.
 

@@ -33,6 +33,7 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.PointerIcon;
 import android.view.Surface;
 import android.view.View;
@@ -672,6 +673,53 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
             return false;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private Button r10CtrlOverlay;
+
+    /** Called from native code when the user taps the letterbox area. */
+    public void toggleCtrlOverlay() {
+        runOnUiThread(() -> {
+            if (r10CtrlOverlay == null) {
+                createCtrlOverlay();
+            }
+            if (r10CtrlOverlay != null) {
+                r10CtrlOverlay.setVisibility(
+                        r10CtrlOverlay.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+            }
+        });
+    }
+
+    private void createCtrlOverlay() {
+        Button button = new Button(this);
+        button.setText("Ctrl");
+        button.setTextSize(16);
+        button.setTextColor(0xFFFFFFFF);
+        button.setBackgroundColor(0x99000000);
+        button.setFocusable(false);
+        button.setFocusableInTouchMode(false);
+        button.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT));
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT));
+                return true;
+            default:
+                return false;
+            }
+        });
+        int margin = (int)(8 * getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout.LayoutParams params = new android.widget.FrameLayout.LayoutParams(
+                (int)(64 * getResources().getDisplayMetrics().density),
+                (int)(48 * getResources().getDisplayMetrics().density));
+        params.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+        params.rightMargin = margin;
+        addContentView(button, params);
+        button.setVisibility(View.GONE);
+        r10CtrlOverlay = button;
     }
 
     /* Transition to next state */

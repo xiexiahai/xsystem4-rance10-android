@@ -197,6 +197,19 @@ bool PE_IsKeyWaitShow(int no)
 void PE_SetMessageWindowText(int no, struct string *text, int message,
 		struct string *adv, int version, int step)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT")) {
+		char hex[1201];
+		int used = 0;
+		hex[0] = 0;
+		if (text && text->text) {
+			int n = text->size < 300 ? text->size : 300;
+			for (int k = 0; k < n && used + 3 < (int)sizeof(hex); k++)
+				used += snprintf(hex + used, sizeof(hex) - used, "%02x",
+					(unsigned char)text->text[k]);
+		}
+		sys_message("[mwtext] no=%d len=%d msg=%d ver=%d step=%d hex=%s\n",
+			no, text ? (int)text->size : -1, message, version, step, hex);
+	}
 	mw_set_text(no, text, message, adv, version, step);
 }
 

@@ -15,8 +15,12 @@
  */
 
 #include "system4.h"
+const char *PE_DebugPartName(int number);
+void vm_trace_callchain_for(unsigned ms);
+bool PE_IsActivityOpen(const char *prefix);
 
 #include "asset_manager.h"
+#include "parts.h"
 #include "audio.h"
 #include "system4/archive.h"
 #include "system4/string.h"
@@ -329,9 +333,12 @@ static void parts_update_mouse(struct parts *parts, Point cur_pos, bool cur_clic
 		parts_widget_mouse(parts,cur_pos,false,false,true);
 		PE_PlayPartsSound(parts->no,3);
 		clicked_parts = parts->no;
+		if (strstr(PE_DebugPartName(parts->no), "Battle") ||
+				strstr(PE_DebugPartName(parts->no), "Quest"))
+			PE_RecordNavigationClick(parts->no, PE_DebugPartName(parts->no));
 		if (getenv("XSYSTEM4_TRACE_INPUT"))
-			sys_message("[parts-click] parts=%d delegate=%d controller=%d\n",
-				parts->no, parts->delegate_index, parts->controller_no);
+			sys_message("[parts-click] parts=%d delegate=%d controller=%d name=%s\n",
+				parts->no, parts->delegate_index, parts->controller_no, PE_DebugPartName(parts->no));
 
 		parts_msg_push(parts, PARTS_MSG_MOUSE_CLICK,
 				"iii", cur_pos.x, cur_pos.y, VK_LBUTTON);
@@ -511,10 +518,17 @@ void PE_UpdateInputState(int passed_time)
 			PARTS_LIST_FOREACH_REVERSE(hp) {
 				if (!parts_hittest(hp, PARTS_STATE_DEFAULT, cur_pos))
 					continue;
-				sys_message("[hit-scan] parts=%d ctrl=%d clickable=%d allowed=%d delegate=%d\n",
-					hp->no, hp->controller_no, hp->clickable, input_allowed(hp) ? 1 : 0,
-					hp->delegate_index);
-				if (++shown >= 6)
+				sys_message("[hit-scan] parts=%d z=%d z2=%d ctrl=%d clickable=%d allowed=%d delegate=%d "
+					"alpha=%d show=%d disabled=%d mw=%d parent=%d palpha=%d pshow=%d name=%s\n",
+					hp->no, hp->sp.z, hp->sp.z2, hp->controller_no,
+					hp->clickable, input_allowed(hp) ? 1 : 0, hp->delegate_index,
+					hp->global.alpha, hp->global.show ? 1 : 0, hp->input_disabled ? 1 : 0,
+					hp->message_window ? 1 : 0,
+					hp->parent ? hp->parent->no : 0,
+					hp->parent ? hp->parent->global.alpha : 255,
+					hp->parent ? (hp->parent->global.show ? 1 : 0) : 1,
+					PE_DebugPartName(hp->no));
+				if (++shown >= 10)
 					break;
 			}
 		}

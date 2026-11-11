@@ -269,6 +269,8 @@ struct parts_cp_op {
 struct parts_construction_process {
 	struct parts_common common;
 	TAILQ_HEAD(, parts_cp_op) ops;
+	/* Transient: current surface needs its non-replayable pixel base. */
+	bool needs_pixel_snapshot;
 };
 
 enum parts_flash_blend_mode {

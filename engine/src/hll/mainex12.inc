@@ -3,22 +3,42 @@
 static struct ex_value *MainEX12_value(struct string *name,int id)
 {
 	if(id!=0) VM_ERROR("Additional EX reader %d is not implemented",id);
-	return ex_get(ex,name->text);
+	struct ex_value *v=ex_get(ex,name->text);
+	if(getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[ex12] value name=%.48s found=%d type=%d\n",
+			name&&name->text?name->text:"",v?1:0,v?v->type:-1);
+	return v;
 }
 static struct ex_value *MainEX12_at(struct string *name,int index,int id)
 {
 	struct ex_value *v=MainEX12_value(name,id);
-	return v && v->type==EX_LIST && index>=0 ? ex_list_get(v->list,index):NULL;
+	struct ex_value *r=v && v->type==EX_LIST && index>=0 ? ex_list_get(v->list,index):NULL;
+	if(getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[ex12] at name=%.48s idx=%d found=%d type=%d\n",
+			name&&name->text?name->text:"",index,r?1:0,r?r->type:-1);
+	return r;
 }
 static struct ex_value *MainEX12_at2(struct string *name,int row,int col,int id)
 {
 	struct ex_value *v=MainEX12_value(name,id);
-	return v && v->type==EX_TABLE && row>=0 && col>=0 ? ex_table_get(v->t,row,col):NULL;
+	struct ex_value *r=v && v->type==EX_TABLE && row>=0 && col>=0 ? ex_table_get(v->t,row,col):NULL;
+	if(getenv("XSYSTEM4_TRACE_INPUT")) {
+		char b2[72]={0};
+		if(r&&r->type==EX_STRING&&r->s&&r->s->text) snprintf(b2,sizeof(b2),"%.60s",r->s->text);
+		sys_message("[ex12] at2 name=%.40s row=%d col=%d found=%d type=%d val=%s\n",
+			name&&name->text?name->text:"",row,col,r?1:0,r?r->type:-1,b2);
+	}
+	return r;
 }
 #define EX12_VALUES(PREFIX,PARAMS,GET) \
-static int PREFIX##Int PARAMS(int dflt,int id) {struct ex_value *v=GET;return v && v->type==EX_INT?v->i:dflt;} \
-static float PREFIX##Float PARAMS(float dflt,int id) {struct ex_value *v=GET;return v && v->type==EX_FLOAT?v->f:dflt;} \
-static struct string *PREFIX##String PARAMS(struct string *dflt,int id) {struct ex_value *v=GET;return string_ref(v && v->type==EX_STRING?v->s:dflt);}
+static int PREFIX##Int PARAMS(int dflt,int id) {struct ex_value *v=GET;int r=v && v->type==EX_INT?v->i:dflt; \
+	if(getenv("XSYSTEM4_TRACE_INPUT")) sys_message("[ex12] Int dflt=%d result=%d used_default=%d\n",dflt,r,!(v&&v->type==EX_INT)); return r;} \
+static float PREFIX##Float PARAMS(float dflt,int id) {struct ex_value *v=GET;float r=v && v->type==EX_FLOAT?v->f:dflt; \
+	if(getenv("XSYSTEM4_TRACE_INPUT")) sys_message("[ex12] Float dflt=%f result=%f used_default=%d\n",(double)dflt,(double)r,!(v&&v->type==EX_FLOAT)); return r;} \
+static struct string *PREFIX##String PARAMS(struct string *dflt,int id) {struct ex_value *v=GET; \
+	if(getenv("XSYSTEM4_TRACE_INPUT")) { char b2[72]={0}; if(v&&v->type==EX_STRING&&v->s&&v->s->text) snprintf(b2,sizeof(b2),"%.60s",v->s->text); \
+	sys_message("[ex12] String used_default=%d val=%s\n",!(v&&v->type==EX_STRING),b2);} \
+	return string_ref(v && v->type==EX_STRING?v->s:dflt);}
 // Parameter-list helper macros keep all nine signatures explicit to libffi.
 #define EX12_TOP(T,I) (struct string *name,T,I)
 #define EX12_ONE(T,I) (struct string *name,int index,T,I)

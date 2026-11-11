@@ -419,8 +419,12 @@ static bool pact_apply_part(struct pact_reader *r, struct ex_tree *t, int parent
 		PE_ReleaseParts(number);
 		return false;
 	}
-	if (parent)
+	if (parent) {
 		PE_SetParentPartsNumber(number, parent);
+		if (getenv("XSYSTEM4_TRACE_INPUT"))
+			sys_message("[pact-parent] part=%d parent=%d name=%s\n",
+				number, parent, t->name ? t->name->text : "(null)");
+	}
 	PE_SetZ(number, pact_at(r,t,"座標",2,1));
 	bool hidden=t==r->compat_hidden;
 	for(int i=0;i<3;i++)hidden|=t==r->compat_unused_route[i];
@@ -435,6 +439,8 @@ static bool pact_apply_part(struct pact_reader *r, struct ex_tree *t, int parent
 	PE_SetPartsOriginPosMode(number, pact_num(r,t,"原点座標モード",1));
 	PE_SetPartsMagX(number, pact_at(r,t,"拡大縮小",0,1));
 	PE_SetPartsMagY(number, pact_at(r,t,"拡大縮小",1,1));
+	PE_SetPartsRotateX(number, pact_at(r,t,"回転",0,0));
+	PE_SetPartsRotateY(number, pact_at(r,t,"回転",1,0));
 	PE_SetPartsRotateZ(number, pact_at(r,t,"回転",2,0));
 	PE_SetAddColor(number, pact_at(r,t,"加算色",0,0), pact_at(r,t,"加算色",1,0), pact_at(r,t,"加算色",2,0));
 	PE_SetMultiplyColor(number, pact_at(r,t,"乗算色",0,255), pact_at(r,t,"乗算色",1,255), pact_at(r,t,"乗算色",2,255));
@@ -719,6 +725,7 @@ bool PE_ReadActivityFileEx(struct string *name, struct string *filename, bool ed
 	struct ex_tree *tree = ex_get_tree(ex, "アクティビティ");
 	struct ex_tree *root = pact_branch(tree, "ルートパーツ");
 	r.compat_hidden = edit ? NULL : pact_compat_new_backup(filename, root);
+	if(!edit && !r.compat_hidden)r.compat_hidden=pact_compat_quest_background_reference(filename,root);
 	if(!edit)pact_compat_unused_route(filename,root,r.compat_unused_route);
 	struct ex_list *keys = NULL;
 	bool version=pact_supported_version(ex);
@@ -768,4 +775,48 @@ bool PE_ReadActivityFileEx(struct string *name, struct string *filename, bool ed
 bool PE_ReadActivityFile(struct string *name, struct string *filename)
 {
 	return PE_ReadActivityFileEx(name, filename, false);
+}
+
+/* Fixed Rance10 HQ default migration after successful XPE metadata install.
+ * Old XPE has no explicit-show/editor provenance. Only the unmodified named
+ * reference pose is covered; changed state/pose/resource/motion is preserved. */
+void parts_activity_restore_reference_compat(void)
+{
+    struct string *activity=cstr_to_string("Game/QuestSelect/QuestSelectBackGround");
+    if(!PE_IsExistActivity(activity) || PE_NumofActivityParts(activity)!=4){free_string(activity);return;}
+    const char *labels[]={"ルートパーツ","QuestList","Default","ＣＧパーツ_000:0"};
+    struct parts *p[4]={0};
+    for(int i=0;i<4;i++) {
+        struct string *label=pact_to_game(labels[i]);
+        if(!PE_IsExistActivityPartsByName(activity,label)){free_string(label);goto done;}
+        int no=PE_GetActivityPartsNumber(activity,label);free_string(label);
+        p[i]=parts_try_get(no);
+        if(!p[i] || p[i]->is_back_scene)goto done;
+    }
+    if(p[0]->parent || p[0]->pending_parent>=0 || p[0]->state!=0 || p[0]->states[0].type!=PARTS_LAYOUT_BOX)goto done;
+    /* PE_Load queues parent IDs for the next ordinary component update. */
+    for(int i=1;i<4;i++)if((p[i]->parent!=p[0] &&
+        (p[i]->parent || p[i]->pending_parent!=p[0]->no)) || p[i]->controller_no!=p[0]->controller_no ||
+        p[i]->state!=0 || p[i]->states[0].type!=PARTS_CG)goto done;
+    struct parts *ref=p[3];struct parts_params *v=&ref->local;
+    if(!v->show || v->alpha!=128 || v->pos.x!=902 || v->pos.y!=419 || v->z!=3 ||
+       v->scale.x!=.67f || v->scale.y!=.67f || v->rotation.x!=-40 || v->rotation.y!=0 ||
+       v->rotation.z!=-5 || v->alpha_clipper_parts_no || ref->origin_mode!=5 ||
+       !TAILQ_EMPTY(&ref->motion))goto done;
+    struct ex *ex=pact_read_file(activity);
+    if(!ex)goto done;
+    struct ex_tree *root=pact_branch(ex_get_tree(ex,"アクティビティ"),"ルートパーツ");
+    const struct ex_tree *reference=pact_compat_quest_background_reference(activity,root);
+    bool match=reference!=NULL;
+    const char *expected[]={"シス／任务一览／背景","シス／准备／地图","シス／准备／地图"};
+    for(int i=1;match && i<4;i++) {
+        struct string *name=pact_to_game(expected[i-1]);
+        struct string *actual=p[i]->states[0].cg.name;
+        match=actual && actual->size==name->size && !memcmp(actual->text,name->text,name->size);
+        free_string(name);
+    }
+    ex_free(ex);
+    if(match)PE_SetShow(ref->no,false);
+done:
+    free_string(activity);
 }

@@ -23,16 +23,30 @@
 #include "system4/cg.h"
 #include "system4/hashtable.h"
 #include "system4/string.h"
+#include "system4/utfsjis.h"
 
 #include "asset_manager.h"
 #include "audio.h"
 #include "vm/page.h"
+#include "vm/heap.h"
 #include "xsystem4.h"
 #include "sact.h"
 #include "sprite.h"
 #include "parts.h"
+#include "rance10_diagnostics.h"
+#include "vm.h"
+const char *PE_DebugPartName(int number);
+static const char *debug_ain_function_name(int fno, char *buf, size_t size);
 #include "perf_window.h"
 #include "parts_internal.h"
+
+static Uint32 parts_dump_due;
+static Uint32 parts_dump_last;
+static Uint32 next_mem_log;
+static Uint32 navigation_click_tick;
+static unsigned navigation_event_id;
+static void parts_dump_once(void);
+static void parts_diagnostics_update(void);
 #include "numeral_layout.inc"
 #include "gauge_layout.inc"
 #include "parts_activity.h"
@@ -178,6 +192,12 @@ struct parts *parts_get(int parts_no)
 	if (slot->value)
 		return slot->value;
 
+	if (getenv("XSYSTEM4_TRACE_INPUT") && parts_no < 100000) {
+		char fname[96];
+		int fno = vm_current_function_number();
+		sys_message("[part-new] parts=%d fno=%d fname=%s\n",
+			parts_no, fno, debug_ain_function_name(fno, fname, sizeof(fname)));
+	}
 	struct parts *parts = parts_alloc();
 	parts->no = parts_no;
 	parts->controller_no = ctrl_stack.active;
@@ -1332,6 +1352,7 @@ void parts_release(int parts_no)
 	struct parts *parts = parts_try_get(parts_no);
 	if (!parts)
 		return;
+	PE_ForgetMenuHiddenParts(parts_no);
 	parts_textures_discard(parts);
 	parts_input_reset_drag(parts);
 	parts_msg_release_parts(parts_no);
@@ -1366,6 +1387,9 @@ void parts_release(int parts_no)
 
 void parts_release_all(void)
 {
+	parts_dump_due = parts_dump_last = next_mem_log = 0;
+	navigation_click_tick = 0;
+	navigation_event_id = 0;
 	parts_flat_async_reset();
 	PE_ClearBackScene();
 	PE_ActivityReset();
@@ -1562,6 +1586,19 @@ void PE_UpdateComponent(possibly_unused int passed_time)
 }
 
 bool parts_message_window_show = true;
+/* PACT "メッセージウィンドウ表示連動": parts carrying the flag follow the
+ * message window's visibility. Rance10 hides the ADV hit buttons while the
+ * common menu is open and relies on this link to restore them when the
+ * message window returns; render.c only skips drawing, never restores show. */
+static void parts_apply_message_window_link(bool show)
+{
+	struct parts *p;
+	PARTS_LIST_FOREACH(p) {
+		if (p->message_window && p->local.show != show)
+			parts_set_show(p, show);
+	}
+}
+
 float parts_message_window_mul_rate = 1.f;
 float parts_message_window_alpha_rate = 1.f;
 
@@ -1577,8 +1614,15 @@ void PE_SetMessageWindowRates(float mul, float alpha)
 
 void PE_Update(int passed_time, bool message_window_show)
 {
+	parts_diagnostics_update();
 	PE_SetMessageWindowRates(1.f, 1.f);
 	parts_flat_async_pump();
+	/* Message-window show link is disabled: Rance10's stale MENU hot area is
+	 * hidden by the script and the link did not restore it in practice. */
+	if (parts_message_window_show != message_window_show &&
+			getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[msgwin-show] %d -> %d\n",
+			parts_message_window_show ? 1 : 0, message_window_show ? 1 : 0);
 	parts_message_window_show = message_window_show;
 	PE_UpdateComponent(passed_time);
 	audio_update();
@@ -1589,11 +1633,18 @@ void PE_Update(int passed_time, bool message_window_show)
 }
 void PE_Update12(int base_time, int scaled_time, bool message_window_show)
 {
+	parts_diagnostics_update();
 	if (base_time < 0)
 		base_time = 0;
 	if (scaled_time < 0)
 		scaled_time = 0;
 	parts_flat_async_pump();
+	/* Message-window show link is disabled: Rance10's stale MENU hot area is
+	 * hidden by the script and the link did not restore it in practice. */
+	if (parts_message_window_show != message_window_show &&
+			getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[msgwin-show] %d -> %d\n",
+			parts_message_window_show ? 1 : 0, message_window_show ? 1 : 0);
 	parts_message_window_show = message_window_show;
 	PE_UpdateComponent(base_time);
 	audio_update();
@@ -1606,8 +1657,15 @@ void PE_Update12(int base_time, int scaled_time, bool message_window_show)
 
 void PE_UpdateParts(int passed_time, possibly_unused bool is_skip, bool message_window_show)
 {
+	parts_diagnostics_update();
 	PE_SetMessageWindowRates(1.f, 1.f);
 	parts_flat_async_pump();
+	/* Message-window show link is disabled: Rance10's stale MENU hot area is
+	 * hidden by the script and the link did not restore it in practice. */
+	if (parts_message_window_show != message_window_show &&
+			getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[msgwin-show] %d -> %d\n",
+			parts_message_window_show ? 1 : 0, message_window_show ? 1 : 0);
 	parts_message_window_show = message_window_show;
 	audio_update();
 	parts_update_animation(passed_time);
@@ -1620,6 +1678,9 @@ bool PE_IsEnableSpeedUp(int parts_no)
 
 void PE_SetDelegateIndex(int parts_no, int delegate_index)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[delegate-bind] parts=%d index=%d name=%s\n",
+			parts_no, delegate_index, PE_DebugPartName(parts_no));
 	parts_get(parts_no)->delegate_index = delegate_index;
 	parts_msg_bind_delegate(parts_no,delegate_index);
 }
@@ -2334,6 +2395,167 @@ bool PE_SetNumeralSurfaceArea(int parts_no, int x, int y, int w, int h, int stat
 	return true;
 }
 
+
+static const char *debug_ain_function_name(int fno, char *buf, size_t size)
+{
+	if (!ain || fno < 0 || fno >= ain->nr_functions || !ain->functions[fno].name)
+		return "?";
+	char *utf = sjis2utf(ain->functions[fno].name, 0);
+	if (!utf)
+		return "?";
+	strncpy(buf, utf, size - 1);
+	buf[size - 1] = '\0';
+	free(utf);
+	return buf;
+}
+
+/* Rance10 hides the ADV hit layer (parts::detail::EraseLayer) while the common
+ * menu is open and never re-shows it afterwards. Remember such raw layer parts
+ * (low numbers, no activity) and restore them when CommonMenu is released. */
+static int menu_hidden_parts[64];
+static int menu_hidden_count;
+
+void PE_ClearMenuHiddenParts(void)
+{
+	menu_hidden_count = 0;
+}
+
+void PE_ForgetMenuHiddenParts(int parts_no)
+{
+	for (int i = menu_hidden_count - 1; i >= 0; i--)
+		if (menu_hidden_parts[i] == parts_no) {
+			memmove(&menu_hidden_parts[i], &menu_hidden_parts[i + 1],
+				(menu_hidden_count - i - 1) * sizeof(menu_hidden_parts[0]));
+			menu_hidden_count--;
+		}
+}
+
+void PE_RememberMenuHiddenParts(int parts_no)
+{
+	if (menu_hidden_count >= 64 || !parts_try_get(parts_no))
+		return;
+	for (int i = 0; i < menu_hidden_count; i++)
+		if (menu_hidden_parts[i] == parts_no)
+			return;
+	menu_hidden_parts[menu_hidden_count++] = parts_no;
+}
+
+void PE_RestoreMenuHiddenParts(void)
+{
+	for (int i = 0; i < menu_hidden_count; i++) {
+		struct parts *p = parts_try_get(menu_hidden_parts[i]);
+		if (!p)
+			continue;
+		bool clickable = p->clickable;
+		struct parts *child;
+		PARTS_FOREACH_CHILD(child, p)
+			if (child->clickable)
+				clickable = true;
+		if (!clickable)
+			continue;
+		if (r10_diagnostic_enabled("XSYSTEM4_DIAG_PARTS") || getenv("XSYSTEM4_TRACE_INPUT"))
+			sys_message("[menu-restore] parts=%d\n", p->no);
+		parts_set_show(p, true);
+	}
+	menu_hidden_count = 0;
+}
+
+extern size_t heap_free_ptr;
+extern size_t scene_sprite_count(void);
+
+int PE_CountParts(void)
+{
+	int n = 0;
+	struct parts *p;
+	PARTS_LIST_FOREACH(p)
+		n++;
+	return n;
+}
+
+
+void PE_SchedulePartsDump(void)
+{
+	if (!r10_diagnostic_enabled("XSYSTEM4_DIAG_PARTS"))
+		return;
+	Uint32 now = SDL_GetTicks();
+	if (parts_dump_due || (parts_dump_last && now - parts_dump_last < 20000))
+		return;
+	parts_dump_due = now + 3000;
+}
+
+static void parts_dump_once(void)
+{
+	int total = 0, shown = 0, logged = 0;
+	struct parts *p;
+	PARTS_LIST_FOREACH(p) {
+		total++;
+		if (!p->global.show)
+			continue;
+		shown++;
+		if (logged >= 80)
+			continue;
+		sys_message("[parts-dump] no=%d local_show=%d global_show=%d z2=%d alpha=%d ctrl=%d parent=%d name=%.100s\n",
+			p->no, p->local.show, p->global.show, p->sp.z2, p->global.alpha,
+			p->controller_no, p->parent ? p->parent->no : 0, PE_DebugPartName(p->no));
+		logged++;
+	}
+	sys_message("[parts-dump-total] parts=%d shown=%d logged=%d truncated=%d\n",
+		total, shown, logged, shown > logged);
+	parts_dump_last = SDL_GetTicks();
+}
+
+void PE_LogResourceUsage(const char *tag)
+{
+	if (!r10_diagnostic_enabled("XSYSTEM4_DIAG_MEMORY"))
+		return;
+	sys_message("[mem] tag=%s parts=%d activities=%d controllers=%d sprites=%zu heap_live_slots=%zu heap_free_slots=%zu heap_capacity_slots=%zu\n",
+		tag ? tag : "?", PE_CountParts(), PE_CountActivities(), PE_get_nr_controllers(),
+		scene_sprite_count(), heap_free_ptr, heap_size - heap_free_ptr, heap_size);
+}
+
+void PE_RecordNavigationClick(int parts_no, const char *name)
+{
+	if (!r10_diagnostic_enabled("XSYSTEM4_DIAG_MEMORY"))
+		return;
+	navigation_event_id++;
+	if (!navigation_event_id)
+		navigation_event_id++;
+	navigation_click_tick = SDL_GetTicks();
+	sys_message("[navigation] phase=click event=%u t_ms=%u part=%d name=%.100s\n",
+		navigation_event_id, (unsigned)navigation_click_tick, parts_no, name);
+}
+
+void PE_LogActivityCreated(const char *name)
+{
+	if (!r10_diagnostic_enabled("XSYSTEM4_DIAG_MEMORY"))
+		return;
+	Uint32 now = SDL_GetTicks();
+	/* Activity creation is neither a rendered frame nor a loading-complete
+	 * signal. Name this interval precisely; event=0 means no captured click. */
+	sys_message("[navigation] phase=activity-created event=%u t_ms=%u since_last_navigation_click_ms=%u has_click=%d name=%.100s\n",
+		navigation_event_id, (unsigned)now,
+		navigation_event_id ? (unsigned)(now - navigation_click_tick) : 0,
+		navigation_event_id != 0, name);
+}
+
+static void parts_diagnostics_update(void)
+{
+	Uint32 now = SDL_GetTicks();
+	if (r10_diagnostic_enabled("XSYSTEM4_DIAG_PARTS") &&
+			parts_dump_due && SDL_TICKS_PASSED(now, parts_dump_due)) {
+		parts_dump_due = 0;
+		parts_dump_once();
+	}
+	if (r10_diagnostic_enabled("XSYSTEM4_DIAG_MEMORY")) {
+		if (!next_mem_log)
+			next_mem_log = now + 60000;
+		else if (SDL_TICKS_PASSED(now, next_mem_log)) {
+			next_mem_log = now + 60000;
+			PE_LogResourceUsage("tick");
+		}
+	}
+}
+
 void PE_ReleaseParts(int parts_no)
 {
 	if (getenv("XSYSTEM4_TRACE_INPUT"))
@@ -2383,6 +2605,35 @@ void PE_SetZ(int parts_no, int z)
 
 void PE_SetShow(int parts_no, bool show)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT")) {
+		struct parts *tp = parts_try_get(parts_no);
+		char fname[96];
+		int fno = vm_current_function_number();
+		sys_message("[set-show] parts=%d show=%d parent=%d fno=%d fname=%s name=%s\n",
+			parts_no, show ? 1 : 0, tp && tp->parent ? tp->parent->no : 0,
+			fno, debug_ain_function_name(fno, fname, sizeof(fname)),
+			PE_DebugPartName(parts_no));
+	}
+	if (!show && parts_no > 0 && parts_no < 100000) {
+		/* Only layers erased by parts::detail::EraseLayer are remembered.
+		 * Ordinary visibility flips (Ｐ＿表示设定) include transient click
+		 * blockers such as 71/72 that must never be resurrected. */
+		char fname[96];
+		int fno = vm_current_function_number();
+		struct parts *rp = parts_try_get(parts_no);
+		/* 71/72-style click blockers sit on z2 0x40000000; the ADV hit
+		 * layers that must come back are ordinary layers far below that. */
+		bool top_blocker = rp && rp->sp.z2 >= 0x40000000;
+		/* Only record while an ADV message window exists: map/formation
+		 * layers are also erased during menu transitions and must stay
+		 * hidden (restoring them made the world map overlap the unit
+		 * formation screen). */
+		if (fno >= 0 && !top_blocker &&
+				PE_IsActivityOpen("MessageWindow01") &&
+				!strcmp(debug_ain_function_name(fno, fname, sizeof(fname)),
+					"parts::detail::EraseLayer"))
+			PE_RememberMenuHiddenParts(parts_no);
+	}
 	parts_set_show(parts_get(parts_no), show);
 }
 
@@ -2549,6 +2800,9 @@ int PE_GetPartsOriginPosMode(int parts_no)
 
 void PE_SetParentPartsNumber(int parts_no, int parent_parts_no)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[set-parent] parts=%d parent=%d name=%s\n",
+			parts_no, parent_parts_no, PE_DebugPartName(parts_no));
 	struct parts *parts = parts_get(parts_no);
 	parts->pending_parent = parent_parts_no;
 	parts_component_dirty(parts);
@@ -2606,6 +2860,9 @@ bool PE_SetPartsGroupNumber(possibly_unused int PartsNumber, possibly_unused int
 
 void PE_SetPartsMessageWindowShowLink(possibly_unused int parts_no, bool message_window_show_link)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[set-mwlink] parts=%d link=%d name=%s\n",
+			parts_no, message_window_show_link ? 1 : 0, PE_DebugPartName(parts_no));
 	struct parts *parts = parts_get(parts_no);
 	parts->message_window = message_window_show_link;
 }
@@ -2692,6 +2949,8 @@ bool PE_save_thumbnail(struct string *filename, int reduction_factor)
 	Texture *src = gfx_main_surface();
 	if (!src || !src->handle || src->w < 1 || src->h < 1)
 		return false;
+	bool trace_save = r10_diagnostic_enabled("XSYSTEM4_DIAG_SAVE");
+	Uint32 start_ms = trace_save ? SDL_GetTicks() : 0;
 	/* Modern PartsEngine takes a target pixel width. Older engines use an
 	 * integer reduction factor; keep that separate compatibility contract. */
 	int w = ain && ain->version>=11 ? min(src->w,reduction_factor) : max(1,src->w/reduction_factor);
@@ -2726,10 +2985,13 @@ bool PE_save_thumbnail(struct string *filename, int reduction_factor)
 	gfx_copy_stretch_with_alpha_map(&dst, 0, 0, w, h, cur, 0, 0, cur->w, cur->h);
 	if (have_tmp)
 		gfx_delete_texture(&tmp);
+	Uint32 resized_ms = trace_save ? SDL_GetTicks() : 0;
 
 	char *path = savedir_path(filename->text);
 	struct save_file output;
 	bool ok = begin_save_file(&output, path);
+	Uint32 opened_ms = trace_save ? SDL_GetTicks() : 0;
+	Uint32 read_ms = opened_ms;
 	if (ok) {
 		struct cg image = {
 			.type = ALCG_UNKNOWN,
@@ -2737,11 +2999,18 @@ bool PE_save_thumbnail(struct string *filename, int reduction_factor)
 				.pixel_pitch=w*3,.alpha_pitch=1},
 			.pixels = gfx_get_pixels(&dst)
 		};
+		read_ms = trace_save ? SDL_GetTicks() : 0;
 		ok = end_save_file(&output, image.pixels && cg_write(&image, ALCG_QNT, output.file));
 		free(image.pixels);
 	}
 	free(path);
 	gfx_delete_texture(&dst);
+	if (trace_save) {
+		Uint32 end_ms = SDL_GetTicks();
+		NOTICE("[parts-thumbnail-perf] ok=%d width=%d height=%d resize_ms=%u open_ms=%u readback_ms=%u persist_cleanup_ms=%u total_ms=%u",
+			ok,w,h,(unsigned)(resized_ms-start_ms),(unsigned)(opened_ms-resized_ms),
+			(unsigned)(read_ms-opened_ms),(unsigned)(end_ms-read_ms),(unsigned)(end_ms-start_ms));
+	}
 	return ok;
 }
 

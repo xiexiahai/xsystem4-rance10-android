@@ -82,17 +82,20 @@ class BundledLauncherActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var progress: ProgressBar
     private lateinit var action: Button
-    private var autoLaunch = true
+    private var launched = false
+    private var content: LinearLayout? = null
+    private var uiShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        autoLaunch = savedInstanceState?.getBoolean("autoLaunch", true) ?: true
         val padding = (24 * resources.displayMetrics.density).toInt()
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             setPadding(padding, padding, padding, padding)
         }
-        layout.addView(TextView(this).apply { text = "兰斯03"; textSize = 28f; gravity = Gravity.CENTER })
+        layout.addView(TextView(this).apply {
+            text = applicationInfo.loadLabel(packageManager); textSize = 28f; gravity = Gravity.CENTER
+        })
         status = TextView(this).apply { textSize = 17f; setPadding(0, padding, 0, padding) }
         layout.addView(status)
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000 }
@@ -103,7 +106,15 @@ class BundledLauncherActivity : Activity() {
             text = "开源许可"
             setOnClickListener { startActivity(Intent(this@BundledLauncherActivity, LicensesMenuActivity::class.java)) }
         })
-        setContentView(layout)
+        // Kept detached: the window stays invisible while files are already
+        // prepared. Only first-time extraction or an error attaches it.
+        content = layout
+    }
+
+    private fun showUi() {
+        if (uiShown) return
+        uiShown = true
+        content?.let { setContentView(it) }
     }
 
     override fun onResume() {
@@ -118,45 +129,72 @@ class BundledLauncherActivity : Activity() {
         super.onPause()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        outState.putBoolean("autoLaunch", autoLaunch)
-        super.onSaveInstanceState(outState)
-    }
-
     private fun render(state: BundledState) {
         action.isEnabled = state is BundledState.Ready || state is BundledState.Failed
         progress.isIndeterminate = state is BundledState.Idle || state is BundledState.Working && state.total == 0L
         when (state) {
             BundledState.Idle -> status.text = "正在检查游戏文件…"
             is BundledState.Working -> {
+                if (state.total > 0) showUi()
                 val percent = if (state.total > 0) state.done * 100 / state.total else 0
                 status.text = "首次启动正在准备游戏：$percent%\n无需联网，请稍候。"
                 progress.progress = (percent * 10).toInt()
                 action.text = "准备中…"
             }
             is BundledState.Failed -> {
-                status.text = state.message; action.text = "重试"
-                action.setOnClickListener { autoLaunch = true; BundledPreparation.start(applicationContext) }
+                showUi()
+                status.text = state.message; action.visibility = android.view.View.VISIBLE
+                action.text = "重试"
+                action.setOnClickListener { launched = false; BundledPreparation.start(applicationContext) }
             }
             is BundledState.Ready -> {
-                status.text = "游戏已就绪"; progress.progress = 1000; action.text = "开始游戏"
-                action.setOnClickListener { launchGame(state.dir, state.apkArchives) }
-                if (autoLaunch) launchGame(state.dir, state.apkArchives)
+                // Enter the game directly: the preparation screen is only a
+                // first-launch step, never a menu between the user and the game.
+                status.text = "正在启动…"; progress.progress = 1000
+                action.visibility = android.view.View.GONE
+                if (!launched) {
+                    launched = true
+                    launchGame(state.dir, state.apkArchives)
+                }
             }
         }
     }
 
     private fun launchGame(dir: File, apkArchives: Array<String>) {
-        autoLaunch = false
-        val save = File(filesDir, "SaveData")
+        // Same save-profile selection as the standard launcher: the cheat build
+        // uses cheat-saves/main, the normal build uses saves/main. The bundled
+        // launcher used to hard-code SaveData, which made existing saves look
+        // lost after an upgrade.
+        val preferences = getSharedPreferences("rance10-launch", MODE_PRIVATE)
+        val profileKey = if (BuildConfig.RANCE10_CHEATS) "active_cheat_save_profile" else "active_save_profile"
+        val exists = SaveProfile.DirectoryExists { File(filesDir, it).isDirectory }
+        val relative = if (BuildConfig.RANCE10_CHEATS)
+            SaveProfile.selectCheat(preferences.getString(profileKey, null), null, exists)
+        else
+            SaveProfile.select(preferences.getString(profileKey, null), null, exists)
+        val save = File(filesDir, relative)
         if (!save.isDirectory && !save.mkdirs()) {
             status.text = "无法创建存档目录，请清理空间后重试。"
             return
         }
+        preferences.edit().putString(profileKey, relative).apply()
+        // Migrate the temporary SaveData used by older bundled builds, but only
+        // when the selected profile is still empty (never overwrite progress).
+        val legacy = File(filesDir, "SaveData")
+        if (legacy.isDirectory && (save.list()?.isEmpty() != false)) {
+            legacy.listFiles()?.forEach { file ->
+                if (file.isFile) runCatching { file.copyTo(File(save, file.name), overwrite = false) }
+            }
+        }
         startActivity(Intent(this, XSystem4Activity::class.java).apply {
+            Rance10Diagnostics.forward(this@BundledLauncherActivity, intent, this)
             putExtra(XSystem4Activity.EXTRA_GAME_ROOT, dir.path)
             putExtra(XSystem4Activity.EXTRA_SAVE_DIR, save.path)
             putExtra(XSystem4Activity.EXTRA_APK_ARCHIVES, apkArchives)
+            // Same save format as the standard launcher: without this flag the
+            // engine falls back to classic GSAVE, and R10GS1 saves written by a
+            // previous build are rejected at load time (auto-save -> title).
+            putExtra("GLOBAL_GRAPH_PROBE", true)
             addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         })
     }

@@ -67,6 +67,8 @@ static mat4 world_view_transform = MAT4(
 static struct shader default_shader;
 
 static GLuint main_surface_fb;
+/* Empty between reads: never retain a parked texture attachment. */
+static GLuint readback_fb;
 static struct texture main_surface;
 static struct texture *view = &main_surface;
 static GLint max_texture_size;
@@ -147,6 +149,8 @@ void gfx_load_shader(struct shader *dst, const char *vertex_shader_path, const c
 
 static int gl_initialize(void)
 {
+	/* A new graphics context owns a new framebuffer namespace. */
+	readback_fb = 0;
 	geometry_layout_count = 0; // Object names belong to this GL context only.
 	geometry_cache_enabled = !getenv("XSYSTEM4_DISABLE_GEOMETRY_CACHE");
 	gfx_load_shader(&default_shader, "shaders/render.v.glsl", "shaders/render.f.glsl");
@@ -294,6 +298,10 @@ int gfx_init(void)
 
 void gfx_fini(void)
 {
+	if (readback_fb) {
+		glDeleteFramebuffers(1, &readback_fb);
+		readback_fb = 0;
+	}
 	for (unsigned i = 0; i < geometry_layout_count; i++)
 		glDeleteVertexArrays(1, &geometry_layouts[i].vao);
 	geometry_layout_count = 0;
@@ -912,10 +920,20 @@ SDL_Color gfx_get_pixel(Texture *t, int x, int y)
 
 void *gfx_get_pixels(Texture *t)
 {
-	GLuint fbo = gfx_set_framebuffer(GL_READ_FRAMEBUFFER, t, 0, 0, t->w, t->h);
+	if (!readback_fb)
+		glGenFramebuffers(1, &readback_fb);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, readback_fb);
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->handle, 0);
+	glViewport(0, 0, t->w, t->h);
+	if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		ERROR("Incomplete framebuffer");
 	void *pixels = xmalloc(t->w * t->h * 4);
 	glReadPixels(0, 0, t->w, t->h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-	gfx_reset_framebuffer(GL_READ_FRAMEBUFFER, fbo);
+	/* A persistent FBO must not keep GPU storage alive after texture deletion. */
+	glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+	/* Preserve the established readback binding/viewport contract. */
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, main_surface_fb);
+	glViewport(0, 0, sdl.w, sdl.h);
 	return pixels;
 }
 

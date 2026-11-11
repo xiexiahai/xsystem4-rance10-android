@@ -173,6 +173,15 @@ bool parts_async_busy(struct parts_async_executor *executor)
 	return busy;
 }
 
+bool parts_async_queue_full(struct parts_async_executor *executor)
+{
+    if (!executor || SDL_LockMutex(executor->mutex) != 0)
+        return false; /* Let submit report a real executor failure directly. */
+    bool full = !executor->stop && executor->count >= executor->limit;
+    SDL_UnlockMutex(executor->mutex);
+    return full;
+}
+
 bool parts_async_cancel(struct parts_async_executor *executor, uint64_t id)
 {
 	if (!executor)

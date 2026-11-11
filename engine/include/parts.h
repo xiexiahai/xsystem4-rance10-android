@@ -157,6 +157,19 @@ bool PE_IsExist(int parts_no);
 // PartsFunc interface
 void PE_set_active_controller(int controller_no);
 int PE_get_active_controller(void);
+int PE_CountActivities(void);
+int PE_CountParts(void);
+void PE_LogResourceUsage(const char *tag);
+void PE_SchedulePartsDump(void);
+void PE_RecordNavigationClick(int parts_no, const char *name);
+void PE_LogActivityCreated(const char *name);
+
+bool PE_IsActivityOpen(const char *prefix);
+void PE_RememberMenuHiddenParts(int parts_no);
+void PE_RestoreMenuHiddenParts(void);
+void PE_ClearMenuHiddenParts(void);
+void PE_ForgetMenuHiddenParts(int parts_no);
+
 int PE_get_system_controller(void);
 int PE_get_nr_controllers(void);
 int PE_get_controller_index(int id);

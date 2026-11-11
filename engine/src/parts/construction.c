@@ -676,6 +676,13 @@ bool parts_build_construction_process(struct parts *parts,
 			break;
 		}
 	}
+	/* Only a successful replay beginning with a complete initializer can
+	 * discard a previous, non-replayable pixel base. A later initializer is
+	 * deliberately conservative: earlier ops might require that base. */
+	struct parts_cp_op *first = TAILQ_FIRST(&cproc->ops);
+	if (first && (first->type == PARTS_CP_CREATE ||
+			first->type == PARTS_CP_CREATE_PIXEL_ONLY || first->type == PARTS_CP_CG))
+		cproc->needs_pixel_snapshot = false;
 	parts_dirty(parts);
 	return true;
 }
@@ -717,7 +724,8 @@ struct cg *parts_construction_snapshot(struct parts *parts, int state, size_t re
         }
     }
     if (glGetError() != GL_NO_ERROR) return NULL;
-    struct parts_construction_process next = {.common = live->common, .ops = live->ops};
+    struct parts_construction_process next = {.common = live->common, .ops = live->ops,
+        .needs_pixel_snapshot = live->needs_pixel_snapshot};
     next.common.texture = (Texture){0};
     if (live->common.texture.handle) {
         Texture *texture = &live->common.texture;
@@ -798,6 +806,11 @@ bool PE_ClearPartsConstructionProcess(int parts_no, int state)
 		return false;
 	struct parts *parts = parts_get(parts_no);
 	struct parts_construction_process *cproc = parts_get_construction_process(parts, state);
+	/* Internal clear is also a destructor/error helper: only the public
+	 * command-discard operation changes snapshot provenance. The typed
+	 * accessor above already made a parked surface resident. */
+	if (!TAILQ_EMPTY(&cproc->ops) && cproc->common.texture.handle)
+		cproc->needs_pixel_snapshot = true;
 	return parts_clear_construction_process(cproc);
 }
 

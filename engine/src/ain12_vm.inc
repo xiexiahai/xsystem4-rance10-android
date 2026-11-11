@@ -109,6 +109,23 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 {
 	const char *lib = ain->libraries[libno].name;
 	struct ain_hll_function *f = &ain->libraries[libno].functions[fno];
+	if (getenv("XSYSTEM4_TRACE_HLL")) {
+		/* Native AIN12 library calls never reach ffi.c, so log them here.
+		 * Bounded: each distinct "Library.Function/n" is printed a few times. */
+		static char seen[256][72];
+		static int hits[256];
+		static int seen_n;
+		char key[72];
+		snprintf(key, sizeof(key), "%s.%s/%d", lib, f->name, f->nr_arguments);
+		int slot = -1;
+		for (int i = 0; i < seen_n; i++)
+			if (!strcmp(seen[i], key)) { slot = i; break; }
+		if (slot < 0 && seen_n < 256) { slot = seen_n++; strncpy(seen[slot], key, sizeof(seen[0]) - 1); }
+		if (slot >= 0 && hits[slot] < 3) {
+			hits[slot]++;
+			sys_message("[ain12] %s\n", key);
+		}
+	}
 	if (!strcmp(lib,"Math") && !strcmp(f->name,"Abs")) {
 		/* AIN12 gives both overloads the same name. The legacy static Abs
 		 * export is C abs(int); passing floats through that FFI signature
@@ -537,8 +554,34 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 			}
 		}
 		ain12_resize(slot,kept,false);
-	} else if(!strcmp(name,"Shuffle") && n==2) {
+	} else if(!strcmp(name,"Shuffle")) {
+		if (n != 2) {
+			if (getenv("XSYSTEM4_TRACE_HLL"))
+				sys_message("[shuffle] unsupported arg count n=%d slot=%d count=%d\n", n, slot, count);
+			return false;
+		}
 		uint32_t seed=stack_pop().i;stack_pop();
+		/* Rance 10 passes -1 to mean "use a fresh random seed". Feeding that
+		 * literal into mt19937 makes every shuffle reproducible, so the battle
+		 * shuffle button produced the same order each time. */
+		if (seed == 0xFFFFFFFFu) {
+			static struct mt19937 sysrand;
+			static bool sysrand_init;
+			if (!sysrand_init) {
+				mt19937_init(&sysrand, (uint32_t)time(NULL));
+				sysrand_init = true;
+			}
+			seed = mt19937_genrand(&sysrand);
+		}
+		static unsigned shuffle_calls;
+		if (getenv("XSYSTEM4_TRACE_HLL") && shuffle_calls < 200) {
+			shuffle_calls++;
+			char before[96]; int used = 0; before[0] = 0;
+			for (int i = 0; i < count && i < 8 && used < 80; i++) {
+				used += snprintf(before + used, sizeof(before) - used, "%s%d", i ? "," : "", p->values[i*width].i);
+			}
+			sys_message("[shuffle] call=%u slot=%d count=%d width=%d seed=%u before=%s\n", shuffle_calls, slot, count, width, seed, before);
+		}
 		struct mt19937 random;mt19937_init(&random,seed);
 		for(int i=count-1;i>0;i--) {
 			uint32_t bound=i+1,threshold=(uint32_t)(-bound)%bound,value;
@@ -547,6 +590,13 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 			for(int k=0;k<width;k++) {
 				union vm_value tmp=p->values[i*width+k];p->values[i*width+k]=p->values[other*width+k];p->values[other*width+k]=tmp;
 			}
+		}
+		if (getenv("XSYSTEM4_TRACE_HLL") && shuffle_calls) {
+			char after[96]; int used = 0; after[0] = 0;
+			for (int i = 0; i < count && i < 8 && used < 80; i++) {
+				used += snprintf(after + used, sizeof(after) - used, "%s%d", i ? "," : "", p->values[i*width].i);
+			}
+			sys_message("[shuffle] after=%s\n", after);
 		}
 	} else if ((!strcmp(name, "Find") || !strcmp(name, "FindLast") || !strcmp(name, "IsExist")) && (n==2 || n==4) && width == 1) {
 		union vm_value value = stack_pop();int begin=0,end=count;

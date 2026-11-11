@@ -14,6 +14,7 @@
  * along with this program; if not, see <http://gnu.org/licenses/>.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "system4/ain.h"
@@ -147,6 +148,8 @@ HLL_WARN_UNIMPLEMENTED(false, bool, MainEXFile, ReloadDebugEXFile, void);
  */
 static int MainEXFile_Handle(struct string *name)
 {
+	if (getenv("XSYSTEM4_TRACE_INPUT") && name)
+		sys_message("[mainex-open] %.60s\n", name->text ? name->text : "");
 	struct ex_value *v = ex_get(ex, name->text);
 	return v ? v->id : 0;
 }
@@ -194,42 +197,37 @@ static int MainEXFile_A2Handle(int handle, int row, int col)
 static int MainEXFile_IA2Handle(int handle, int key, struct string *format_name)
 {
 	struct ex_table *t = handle_to_table(handle);
-	if (!t)
-		return 0;
-	int row = ex_row_at_int_key(t, key);
-	if (row < 0)
-		return 0;
-	int col = ex_col_from_name(t, format_name->text);
-	if (col < 0)
-		return 0;
-	return t->rows[row][col].id;
+	int row = t ? ex_row_at_int_key(t, key) : -1;
+	int col = (t && row >= 0) ? ex_col_from_name(t, format_name->text) : -1;
+	int id = (t && row >= 0 && col >= 0) ? t->rows[row][col].id : 0;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] IA2 h=%d key=%d field=%.40s row=%d col=%d id=%d\n",
+			handle, key, format_name && format_name->text ? format_name->text : "", row, col, id);
+	return id;
 }
 
 static int MainEXFile_SA2Handle(int handle, struct string *key, struct string *format_name)
 {
 	struct ex_table *t = handle_to_table(handle);
-	if (!t)
-		return 0;
-	int row = ex_row_at_string_key(t, key->text);
-	if (row < 0)
-		return 0;
-	int col = ex_col_from_name(t, format_name->text);
-	if (col < 0)
-		return 0;
-	return t->rows[row][col].id;
+	int row = t ? ex_row_at_string_key(t, key->text) : -1;
+	int col = (t && row >= 0) ? ex_col_from_name(t, format_name->text) : -1;
+	int id = (t && row >= 0 && col >= 0) ? t->rows[row][col].id : 0;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] SA2 h=%d key=%.40s field=%.40s row=%d col=%d id=%d\n",
+			handle, key && key->text ? key->text : "",
+			format_name && format_name->text ? format_name->text : "", row, col, id);
+	return id;
 }
 
 static int MainEXFile_RA2Handle(int handle, int row, struct string *format_name)
 {
 	struct ex_table *t = handle_to_table(handle);
-	if (!t)
-		return 0;
-	if (row < 0 || (unsigned)row >= t->nr_rows)
-		return 0;
-	int col = ex_col_from_name(t, format_name->text);
-	if (col < 0)
-		return 0;
-	return t->rows[row][col].id;
+	int col = (t && row >= 0 && (unsigned)row < t->nr_rows) ? ex_col_from_name(t, format_name->text) : -1;
+	int id = (t && col >= 0) ? t->rows[row][col].id : 0;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] RA2 h=%d row=%d field=%.40s col=%d id=%d\n",
+			handle, row, format_name && format_name->text ? format_name->text : "", col, id);
+	return id;
 }
 
 static int MainEXFile_Row(int handle)
@@ -378,6 +376,8 @@ static bool MainEXFile_Int(int handle, int *data)
 	}
 
 	*data = handles[handle]->i;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] Int h=%d v=%d\n", handle, *data);
 	return 1;
 }
 
@@ -391,7 +391,20 @@ static bool MainEXFile_Float(int handle, float *data)
 	}
 
 	*data = handles[handle]->f;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] Float h=%d v=%f\n", handle, (double)*data);
 	return 1;
+}
+
+
+static void mainex_trace(const char *where, int handle, int a, int b, bool ok, struct string **data)
+{
+	if (!getenv("XSYSTEM4_TRACE_INPUT"))
+		return;
+	char buf[80] = {0};
+	if (ok && data && *data && (*data)->text)
+		snprintf(buf, sizeof(buf), "%.60s", (*data)->text);
+	sys_message("[mainex] %s h=%d a=%d b=%d ok=%d val=%s\n", where, handle, a, b, ok ? 1 : 0, buf);
 }
 
 static bool MainEXFile_String(int handle, struct string **data)
@@ -404,6 +417,7 @@ static bool MainEXFile_String(int handle, struct string **data)
 	}
 
 	*data = string_ref(handles[handle]->s);
+	mainex_trace("String", handle, 0, 0, true, data);
 	return 1;
 }
 
@@ -422,6 +436,8 @@ static bool MainEXFile_AInt(int handle, int index, int *data)
 	}
 
 	*data = v->i;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] AInt h=%d idx=%d v=%d\n", handle, index, *data);
 	return 1;
 }
 
@@ -440,6 +456,8 @@ static bool MainEXFile_AFloat(int handle, int index, float *data)
 	}
 
 	*data = v->f;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] AFloat h=%d idx=%d v=%f\n", handle, index, (double)*data);
 	return 1;
 }
 
@@ -458,6 +476,7 @@ static bool MainEXFile_AString(int handle, int index, struct string **data)
 	}
 
 	*data = string_ref(v->s);
+	mainex_trace("AString", handle, index, 0, true, data);
 	return 1;
 }
 
@@ -476,6 +495,8 @@ static bool MainEXFile_A2Int(int handle, int row, int col, int *data)
 	}
 
 	*data = v->i;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] A2Int h=%d row=%d col=%d v=%d\n", handle, row, col, *data);
 	return 1;
 }
 
@@ -494,6 +515,8 @@ static bool MainEXFile_A2Float(int handle, int row, int col, float *data)
 	}
 
 	*data = v->f;
+	if (getenv("XSYSTEM4_TRACE_INPUT"))
+		sys_message("[mainex-val] A2Float h=%d row=%d col=%d v=%f\n", handle, row, col, (double)*data);
 	return 1;
 }
 
@@ -512,6 +535,7 @@ static bool MainEXFile_A2String(int handle, int row, int col, struct string **da
 	}
 
 	*data = string_ref(v->s);
+	mainex_trace("A2String", handle, row, col, true, data);
 	return 1;
 }
 
@@ -711,6 +735,8 @@ static bool MainEXFile_GetEXName(struct string *tree_path, int index, struct str
 
 #define DEFINE_NAME_QUERY(type, function, params, args) \
 	static type MainEXFile_name_ ## function params { \
+		if (getenv("XSYSTEM4_TRACE_INPUT")) \
+			sys_message("[mainex-call] %s ex=%.40s\n", #function, name && name->text ? name->text : ""); \
 		return MainEXFile_ ## function args; \
 	}
 NAME_QUERIES(DEFINE_NAME_QUERY)

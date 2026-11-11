@@ -49,6 +49,7 @@ struct sprite {
 extern bool scene_is_dirty;
 
 void scene_register_sprite(struct sprite *sp);
+size_t scene_sprite_count(void);
 void scene_unregister_sprite(struct sprite *sp);
 void scene_render(void);
 int scene_set_wp(int cg_no);

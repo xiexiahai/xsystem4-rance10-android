@@ -78,3 +78,43 @@ static bool pact_compat_unused_route(struct string *file,struct ex_tree *root,
     for(int i=0;i<3;i++)out[i]=found[i];
     return true;
 }
+
+/* User-confirmed extra HQ map reference. This exact-template policy does not
+ * establish the original DLL meaning of editor/lock flags. Keep registration,
+ * CG contents, transforms and editor mode intact; changed templates fail closed. */
+static const struct ex_tree *pact_compat_quest_background_reference(struct string *file,struct ex_tree *root)
+{
+    if(!file || !root)return NULL;
+    const char *expected="Game/QuestSelect/QuestSelectBackGround";size_t len=strlen(expected);
+    if((size_t)file->size!=len && (size_t)file->size!=len+7)return NULL;
+    for(size_t i=0;i<len;i++)if((file->text[i]=='\\'?'/':file->text[i])!=expected[i])return NULL;
+    if((size_t)file->size>len && memcmp(file->text+len,".pactex",7))return NULL;
+    struct ex_tree *children=pact_branch(root,"子パーツ");
+    if(!children || children->nr_children!=3)return NULL;
+    struct pact_reader check={0};
+    const char *names[]={"QuestList","Default","ＣＧパーツ_000:0"};
+    const char *keys[]={"エディタ上表示","ロックしている","表示","アルファ"};
+    const int flags[3][4]={{1,0,1,255},{1,0,1,255},{0,1,1,128}};
+    const float pos[3][3]={{960,540,1},{960,540,2},{902,419,3}};
+    const struct ex_tree *reference=NULL;const char *cg[3];
+    for(int i=0;i<3;i++) {
+        struct ex_tree *t=pact_branch(children,names[i]);if(!t)return NULL;
+        for(int j=0;j<4;j++)if(pact_num(&check,t,keys[j],-1)!=flags[i][j])return NULL;
+        for(int j=0;j<3;j++) {
+            if(pact_at(&check,t,"座標",j,-9999)!=pos[i][j])return NULL;
+            if(pact_at(&check,t,"回転",j,-9999)!=(i==2?(j==0?-40.f:j==2?-5.f:0.f):0.f))return NULL;
+        }
+        for(int j=0;j<2;j++)if(pact_at(&check,t,"拡大縮小",j,-9999)!=(i==2?.67f:1.f))return NULL;
+        if(pact_num(&check,t,"原点座標モード",-1)!=5)return NULL;
+        struct ex_tree *component=pact_branch(t,"種類別情報");
+        if(pact_num(&check,component,"パーツタイプ",-1)!=10)return NULL;
+        struct ex_tree *state=pact_branch(component,"通常状態");
+        if(pact_num(&check,state,"パーツタイプ",-1)!=11)return NULL;
+        cg[i]=pact_string(&check,state,"ＣＧ名");
+        if(i==2)reference=t;
+    }
+    if(check.error || strcmp(cg[0],"シス／任务一览／背景") ||
+       strcmp(cg[1],"シス／准备／地图") || strcmp(cg[1],cg[2]))return NULL;
+    return reference;
+}
+

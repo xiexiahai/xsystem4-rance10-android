@@ -5,6 +5,16 @@
         <!-- Customize your theme here. -->
     </style>
     <!-- A ready installation hands off immediately without a launcher page. -->
+    <!-- Invisible preparation window: verification runs without any intermediate
+         screen; the progress layout is attached only for first-time extraction
+         or an error. -->
+    <style name="BundledLauncherTransparent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
     <style name="Rance10LauncherTheme" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:windowDisablePreview">true</item>

@@ -53,15 +53,37 @@ See [docs/compatibility.md](docs/compatibility.md) for the status table.
 
 ## Status
 
-Playable prototype for both titles. The main loop, battles and saves work; some
-UI behaviour is still being fixed.
+Playable for both titles. Current Android release: **1.0.4 (versionCode 144,
+2026-11-11)**.
+
+Fixed in 1.0.4 (relative to earlier public snapshots):
+
+* Dialogue MENU can be opened repeatedly (layers erased while the menu was open
+  are restored when the menu/window is re-created).
+* Party-change / shuffle now randomises correctly when the script passes a
+  negative seed.
+* Save/load: auto-save size limit raised, save-profile directories fixed
+  (`saves/main`, `cheat-saves/main`), global-graph load flag forwarded by the
+  launcher, and layer/route state restored after loading.
+* Save/load of composed textures no longer loses final pixels (snapshot v29 for
+  non-replayable images; ordinary snapshots stay byte-identical to v28).
+* Auto-save false rejection for weak receiver/closure states fixed.
+* Resource budget back-pressure for CG preparation and texture restore
+  (reduces load stalls under memory pressure).
+* Touch controls: long-press no longer triggers Ctrl; tapping the left/right
+  letterbox toggles an on-screen Ctrl button instead (button placement is
+  right-side in 1.0.4; moving to the left is planned).
+* Launcher icon updated to the official Rance 10 cover.
 
 Known issues:
 
-* In dialogue, the MENU button only opens the menu once; after closing it the
-  button stops responding until the window is re-created.
-* A texture-parking experiment that caused stale redraws is disabled by default
-  (`XSYSTEM4_PARK_SOURCE=1` re-enables it for benchmarking).
+* On long sessions some devices still get progressively slower battle
+  pre-loading, and may eventually crash/ANR. Save and resource paths have been
+  optimised, but the root cause is not fully confirmed.
+* Map route display may occasionally be missing after loading a save; not
+  reproduced reliably.
+* A texture-parking benchmark mode is off by default (`XSYSTEM4_PARK_SOURCE=1`
+  re-enables it).
 
 ## Android packaging (secondary)
 
@@ -75,8 +97,10 @@ Known issues:
 Bundled mode is content-addressed and incremental: `.afa` archives are mapped
 directly out of the APK (fd slice) instead of being copied, the remaining files
 are extracted into `<app>/no_backup/bundled-game/<content-id>` with per-file
-SHA-256 verification and resumable `.part` files, and saves live in
-`<app>/files/SaveData`.
+SHA-256 verification and resumable `.part` files. Saves live in
+`<app>/files/saves/main` (normal) and `<app>/files/cheat-saves/main` (cheat
+variant); an older `SaveData` directory is only read through the migration
+path.
 
 ## Building
 

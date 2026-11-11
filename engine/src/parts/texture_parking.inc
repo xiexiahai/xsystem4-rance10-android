@@ -17,6 +17,7 @@
 #endif
 #ifndef PARTS_TEX_UPLOAD
 #define PARTS_TEX_UPLOAD gfx_init_texture_with_pixels
+#define PARTS_TEX_UPLOAD_INIT_DEFAULTS 1
 #endif
 
 struct parts_texture_park_slot {
@@ -182,14 +183,8 @@ static bool parts_texture_suspend(Texture **slots, size_t count, size_t limit,
 			goto capture_failed;
 
 		glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &img->min_filter);
-		if (glGetError() != GL_NO_ERROR)
-			goto capture_failed;
 		glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &img->mag_filter);
-		if (glGetError() != GL_NO_ERROR)
-			goto capture_failed;
 		glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &img->wrap_s);
-		if (glGetError() != GL_NO_ERROR)
-			goto capture_failed;
 		glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &img->wrap_t);
 		if (glGetError() != GL_NO_ERROR)
 			goto capture_failed;
@@ -269,21 +264,29 @@ static bool parts_texture_resume(struct parts_texture_park **parkp)
 		if (!tmp.handle || glGetError() != GL_NO_ERROR)
 			goto resume_failed;
 
+#ifndef PARTS_TEX_UPLOAD_INIT_DEFAULTS
+		/* Custom upload hooks need not leave this binding/default sampler. */
 		glBindTexture(GL_TEXTURE_2D, tmp.handle);
 		if (glGetError() != GL_NO_ERROR)
 			goto resume_failed;
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, img->min_filter);
-		if (glGetError() != GL_NO_ERROR)
-			goto resume_failed;
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, img->mag_filter);
-		if (glGetError() != GL_NO_ERROR)
-			goto resume_failed;
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, img->wrap_s);
-		if (glGetError() != GL_NO_ERROR)
-			goto resume_failed;
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, img->wrap_t);
-		if (glGetError() != GL_NO_ERROR)
-			goto resume_failed;
+#endif
+#define RESTORE_SAMPLER(parameter, field, initial) do { \
+		if (restore_all || img->field != (initial)) { \
+			glTexParameteri(GL_TEXTURE_2D, (parameter), img->field); \
+			if (glGetError() != GL_NO_ERROR) goto resume_failed; \
+		} \
+	} while (0)
+#ifdef PARTS_TEX_UPLOAD_INIT_DEFAULTS
+		/* init_texture already set LINEAR/CLAMP and left tmp bound. */
+		const bool restore_all = false;
+#else
+		const bool restore_all = true;
+#endif
+		RESTORE_SAMPLER(GL_TEXTURE_MIN_FILTER, min_filter, GL_LINEAR);
+		RESTORE_SAMPLER(GL_TEXTURE_MAG_FILTER, mag_filter, GL_LINEAR);
+		RESTORE_SAMPLER(GL_TEXTURE_WRAP_S, wrap_s, GL_CLAMP_TO_EDGE);
+		RESTORE_SAMPLER(GL_TEXTURE_WRAP_T, wrap_t, GL_CLAMP_TO_EDGE);
+#undef RESTORE_SAMPLER
 	}
 
 	for (size_t i = 0; i < park->slot_count; i++) {

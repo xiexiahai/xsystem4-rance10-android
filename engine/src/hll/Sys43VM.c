@@ -14,6 +14,7 @@
  */
 
 #include <stdbool.h>
+#include <string.h>
 
 #include "system4.h"
 #include "system4/string.h"

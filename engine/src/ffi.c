@@ -383,6 +383,21 @@ void hll_call(int libno, int fno)
 
 	dsh_trace_init();
 	dsh_trace_record(ain->libraries[libno].name, f->name);
+	if (getenv("XSYSTEM4_TRACE_HLL")) {
+		static char hll_seen[1024][96];
+		static int hll_n;
+		char key[96];
+		snprintf(key, sizeof(key), "%s.%s", ain->libraries[libno].name, f->name);
+		bool found = false;
+		for (int i = 0; i < hll_n; i++)
+			if (!strcmp(hll_seen[i], key)) { found = true; break; }
+		if (!found && hll_n < 1024) {
+			strncpy(hll_seen[hll_n++], key, sizeof(hll_seen[0]) - 1);
+			sys_message("[hll] %s\n", key);
+		}
+		if (vm_in_scenario_function())
+			sys_message("[hllS] %s.%s\n", ain->libraries[libno].name, f->name);
+	}
 
 	/*
 	 * DSH diagnostic: log HLL calls that take a string argument. The last one

@@ -149,6 +149,8 @@ CJSON_PUBLIC(cJSON *) cJSON_Parse(const char *value);
 /* ParseWithOpts allows you to require (and check) that the JSON is null terminated, and to retrieve the pointer to the final byte parsed. */
 /* If you supply a ptr in return_parse_end and parsing fails, then return_parse_end will contain a pointer to the error so will match cJSON_GetErrorPtr(). */
 CJSON_PUBLIC(cJSON *) cJSON_ParseWithOpts(const char *value, const char **return_parse_end, cJSON_bool require_null_terminated);
+/* Fully validate JSON, retaining first matching top-level fields only. */
+CJSON_PUBLIC(cJSON *) cJSON_ParseTopLevelFieldsWithOpts(const char *value, const char **return_parse_end, cJSON_bool require_null_terminated, const char *const *fields, size_t count);
 
 /* Render a cJSON entity to text for transfer/storage. */
 CJSON_PUBLIC(char *) cJSON_Print(const cJSON *item);
