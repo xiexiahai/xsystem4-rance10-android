@@ -1,0 +1,71 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK, CMake and SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "ndk;26.3.11579264" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+
+      - name: Build native engine (arm64-v8a)
+        run: |
+          cmake -S engine -B build-android-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=21 \
+            -DANDROID_USE_LEGACY_TOOLCHAIN_FILE=OFF \
+            -DCMAKE_STAGING_PREFIX="$PWD/android/deps/stage" \
+            -DCMAKE_FIND_ROOT_PATH="$PWD/android/deps/stage" \
+            -DCMAKE_MODULE_PATH="$PWD/android/cmake" \
+            -DCMAKE_PROJECT_INCLUDE="$PWD/tools/android-imports.cmake" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+            -DXSYSTEM4_RANCE10_CHEATS=OFF \
+            -DXSYSTEM4_RANCE03_MOD=OFF
+          cmake --build build-android-arm64 --parallel 4
+
+      - name: Stage JNI libraries
+        run: |
+          mkdir -p android/project/app/src/main/jniLibs/arm64-v8a
+          cp build-android-arm64/libxsystem4.so android/project/app/src/main/jniLibs/arm64-v8a/
+          cp android/deps/stage/lib/libSDL2.so android/deps/stage/lib/libcglm.so android/project/app/src/main/jniLibs/arm64-v8a/
+
+      - name: Build development APK (no bundled game data)
+        working-directory: android/project
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --console=plain
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rance10-dev-arm64
+          path: android/project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: libxsystem4-arm64
+          path: build-android-arm64/libxsystem4.so
+          if-no-files-found: error

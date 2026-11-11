@@ -14,4 +14,9 @@ if(PROJECT_NAME STREQUAL "xsystem4" AND NOT TARGET SDL2::SDL2)
   set_target_properties(cglm PROPERTIES
     IMPORTED_LOCATION "${R10_DEPS}/stage/lib/libcglm.so"
     INTERFACE_INCLUDE_DIRECTORIES "${R10_DEPS}/stage/include")
+  add_library(SndFile::sndfile STATIC IMPORTED)
+  set_target_properties(SndFile::sndfile PROPERTIES
+    IMPORTED_LOCATION "${R10_DEPS}/stage/lib/libsndfile.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${R10_DEPS}/stage/include"
+    INTERFACE_LINK_LIBRARIES "${R10_DEPS}/stage/lib/libogg.a;${R10_DEPS}/stage/lib/libvorbis.a;${R10_DEPS}/stage/lib/libvorbisenc.a;${R10_DEPS}/stage/lib/libvorbisfile.a")
 endif()
