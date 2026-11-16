@@ -48,3 +48,9 @@ performance improvement on every device.
 The correct activation/assignment of the route-completion display and Alice's
 mansion content remain under investigation. Game data and self-contained APKs
 are not distributed in this source repository.
+
+## Acknowledgements
+
+Thanks to [TomorrowX6 / AliceHub](https://github.com/TomorrowX6/AliceHub)
+(formerly re-xsystem4) for public implementation references used when reviewing
+Parts visibility, condition parsing and framebuffer reuse in this release.
