@@ -21,6 +21,7 @@
 
 #include "parts.h"
 #include "parts_internal.h"
+#include "parts_widget.h"
 
 void PE_SetComponentMargin(int parts_no, int top, int bottom, int left, int right)
 {
@@ -163,6 +164,14 @@ static void parts_get_layout_size(struct parts *parts, int *w, int *h)
 		// differ from the hitbox size.
 		*w = state->flat.flat->hdr.width;
 		*h = state->flat.flat->hdr.height;
+		/* A skinned checkbox is a composition: its side label extends past
+		 * the FLAT header. Reserve that text too, without changing layout
+		 * bounds for ordinary FLATs (whose hitbox may be intentionally larger). */
+		if (parts->widget && parts->widget->flat_backed &&
+				parts->widget->type == PARTS_WIDGET_CHECKBOX && !parts->widget->button_mode) {
+			*w = max(*w, state->common.w);
+			*h = max(*h, state->common.h);
+		}
 	} else {
 		*w = state->common.w;
 		*h = state->common.h;

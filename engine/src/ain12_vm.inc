@@ -153,9 +153,9 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 				j+=size;
 			}
 			if(delimiter) {
-				// Included separators are tokens themselves; omit empty spans
-				// around them. The exclude-separators mode retains its old policy.
-				if (!contain || i > start) {
+				// Empty spans are not tokens in either mode. With separators
+				// included, each delimiter is a token of its own.
+				if (i > start) {
 					ain12_resize(result,count+1,false);
 					variable_set(heap_get_page(result),count++,AIN_STRING,vm_int(heap_alloc_string(make_string(s->text+start,i-start))));
 				}
@@ -167,7 +167,7 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 			}
 			i+=width;
 		}
-		if (!contain || start < s->size) {
+		if (start < s->size) {
 			ain12_resize(result,count+1,false);
 			variable_set(heap_get_page(result),count,AIN_STRING,vm_int(heap_alloc_string(make_string(s->text+start,s->size-start))));
 		}

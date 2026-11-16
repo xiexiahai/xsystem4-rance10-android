@@ -495,44 +495,41 @@ static bool build_draw_rect(struct parts_construction_process *cproc, struct par
 	return true;
 }
 
-static bool build_draw_cut_cg(struct parts_construction_process *cproc, struct parts_cp_cut_cg *op)
+#include "cproc_source_cache.inc"
+
+static bool build_draw_cut_cg(struct parts_construction_process *cproc, struct parts_cp_cut_cg *op,
+		struct cproc_source_cache *cache)
 {
 	if (!cproc->common.texture.handle)
 		return false;
 
-	struct cg *cg = asset_cg_load_by_name(op->cg_name->text, NULL);
-	if (!cg) return false;
-
-	Texture src;
-	gfx_init_texture_with_cg(&src, cg);
-	cg_free(cg);
+	Texture scratch = {0};
+	Texture *src = cproc_source_get(cache, op->cg_name->text, &scratch);
+	if (!src) return false;
 
 	gfx_copy_stretch_blend_amap(&cproc->common.texture, op->dx, op->dy, op->dw, op->dh,
-			&src, op->sx, op->sy, op->sw, op->sh);
-	gfx_delete_texture(&src);
+			src, op->sx, op->sy, op->sw, op->sh);
+	cproc_source_release(cache, op->cg_name->text, &scratch);
 	return true;
 }
 
 static bool build_copy_cut_cg(struct parts_construction_process *cproc, struct parts_cp_cut_cg *op,
-		enum parts_cp_op_type type)
+		enum parts_cp_op_type type, struct cproc_source_cache *cache)
 {
 	if (!cproc->common.texture.handle)
 		return false;
 
-	struct cg *cg = asset_cg_load_by_name(op->cg_name->text, NULL);
-	if (!cg) return false;
-
-	Texture src;
-	gfx_init_texture_with_cg(&src, cg);
-	cg_free(cg);
+	Texture scratch = {0};
+	Texture *src = cproc_source_get(cache, op->cg_name->text, &scratch);
+	if (!src) return false;
 
 	void (*copy)(Texture *, int, int, int, int, Texture *, int, int, int, int) =
 		type == PARTS_CP_ALPHA_BLEND_CUT_CG ? gfx_copy_stretch_alpha_blend :
 		type == PARTS_CP_ONLY_ALPHA_CUT_CG ? gfx_copy_stretch_amap :
 		gfx_copy_stretch_with_alpha_map;
 	copy(&cproc->common.texture, op->dx, op->dy, op->dw, op->dh,
-			&src, op->sx, op->sy, op->sw, op->sh);
-	gfx_delete_texture(&src);
+			src, op->sx, op->sy, op->sw, op->sh);
+	cproc_source_release(cache, op->cg_name->text, &scratch);
 	return true;
 }
 
@@ -605,8 +602,8 @@ static bool build_gray_filter(struct parts_construction_process *cproc, struct p
 	return true;
 }
 
-bool parts_build_construction_process(struct parts *parts,
-		struct parts_construction_process *cproc)
+static bool build_construction_process(struct parts *parts,
+		struct parts_construction_process *cproc, struct cproc_source_cache *cache)
 {
 	struct parts_cp_op *op;
 	TAILQ_FOREACH(op, &cproc->ops, entry) {
@@ -650,13 +647,13 @@ bool parts_build_construction_process(struct parts *parts,
 				return false;
 			break;
 		case PARTS_CP_DRAW_CUT_CG:
-			if (!build_draw_cut_cg(cproc, &op->cut_cg))
+			if (!build_draw_cut_cg(cproc, &op->cut_cg, cache))
 				return false;
 			break;
 		case PARTS_CP_COPY_CUT_CG:
 		case PARTS_CP_ALPHA_BLEND_CUT_CG:
 		case PARTS_CP_ONLY_ALPHA_CUT_CG:
-			if (!build_copy_cut_cg(cproc, &op->cut_cg, op->type))
+			if (!build_copy_cut_cg(cproc, &op->cut_cg, op->type, cache))
 				return false;
 			break;
 		case PARTS_CP_DRAW_TEXT:
@@ -685,6 +682,16 @@ bool parts_build_construction_process(struct parts *parts,
 		cproc->needs_pixel_snapshot = false;
 	parts_dirty(parts);
 	return true;
+}
+
+bool parts_build_construction_process(struct parts *parts,
+		struct parts_construction_process *cproc)
+{
+	struct cproc_source_cache cache;
+	cproc_source_init(&cache, cproc);
+	bool ok = build_construction_process(parts, cproc, &cache);
+	cproc_source_clear(&cache);
+	return ok;
 }
 
 

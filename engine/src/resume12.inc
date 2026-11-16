@@ -478,6 +478,26 @@ static bool r12_validate(struct r12_image *c)
         if(f->call_address!=UINT32_MAX&&(f->call_address>=ain->code_size||!boundary[f->call_address]))goto fail;
         if(f->return_address!=UINT32_MAX&&(f->return_address>=ain->code_size||!boundary[f->return_address]))goto fail;
     }
+    /* NEW currently runs an explicit constructor with a nested native VM
+     * invocation. Its VM_RETURN sentinel is only meaningful while that C
+     * activation exists. A snapshot keeps the bytecode frames, not the C
+     * stack; resume through the NEW caller and let function_return deliver
+     * the constructed object. This also upgrades existing five-word frames
+     * without changing the image format or touching the file on disk. */
+    for (int i=0;i<c->fp;i++) {
+        struct function_call *f=&c->frames[i];
+        if (f->return_address!=UINT32_MAX || f->call_address>=ain->code_size ||
+            LittleEndian_getW(ain->code,f->call_address)!=NEW ||
+            f->call_address+instruction_width(NEW)>=ain->code_size ||
+            !boundary[f->call_address+instruction_width(NEW)] ||
+            LittleEndian_getDW(ain->code,f->call_address+6)!=f->fno)
+            continue;
+        int type=LittleEndian_getDW(ain->code,f->call_address+2);
+        if (type>=0 && type<ain->nr_structures &&
+            r12_page(c,f->struct_page,STRUCT_PAGE) &&
+            c->heap[f->struct_page].page->index==type)
+            f->return_address=f->call_address+instruction_width(NEW);
+    }
     free(boundary);return true;
 fail:free(boundary);return false;
 }

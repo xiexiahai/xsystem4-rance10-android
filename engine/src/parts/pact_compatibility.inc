@@ -1,4 +1,31 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+
+/* These eight shipped settings templates contain disabled editor controls
+ * alongside the game's finished skin. Honor their initial visibility, while
+ * retaining activity names/bindings and allowing later script SetShow calls.
+ * Keep this policy scoped: editor flags elsewhere still use the existing
+ * compatibility rules. TomorrowX6/re-xsystem4's activity.c independently
+ * filters this flag before creating runtime Parts; see the takeover record. */
+static bool pact_compat_settings_template(struct string *file)
+{
+	if (!file) return false;
+	struct string *utf = pact_to_utf8(file->text, file->size);
+	for (int i=0;i<utf->size;i++) if (utf->text[i]=='\\') utf->text[i]='/';
+	if (utf->size>=7 && !strcmp(utf->text+utf->size-7,".pactex"))
+		utf->text[utf->size-7]='\0';
+	const char *paths[]={
+		"Asra/设置／０１／消息速度页面", "Asra/设置／０２／消息页面",
+		"Asra/设置／０３／消息窗口页面", "Asra/设置／０４／声音页面",
+		"Asra/设置／０５／输入页面", "Asra/设置／０６／窗口页面",
+		"Asra/设置／０７／网络页面", "Asra/设置／０８／３Ｄ页面"
+	};
+	bool matched=false;
+	for(unsigned i=0;i<sizeof(paths)/sizeof(*paths);i++)
+		if(!strcmp(utf->text,paths[i])) {matched=true;break;}
+	free_string(utf);
+	return matched;
+}
+
 /* Narrow project compatibility rule, not a general interpretation of editor
  * visibility. Keep the duplicate node registered so script name lookups work.
  * A changed template fails the fingerprint and retains the ordinary policy. */
@@ -43,8 +70,8 @@ static const struct ex_tree *pact_compat_new_backup(struct string *file, struct 
 	return backup;
 }
 
-/* The shipped quest-clear template retains an inactive route-progress mockup
- * (99999). First-hand PC quest-clear captures show EXP and rewards instead.
+/* The shipped quest-clear and GAMEOVER templates retain inactive route
+ * placeholders (99999). First-hand PC captures show EXP/rewards instead.
  * This is deliberately scoped to this template/fingerprint, not a global
  * interpretation of editor visibility, nor a replacement progress value. */
 static bool pact_compat_unused_route(struct string *file,struct ex_tree *root,
@@ -54,7 +81,11 @@ static bool pact_compat_unused_route(struct string *file,struct ex_tree *root,
     if(!file || !root)return false;
     const char *expected="Game/Quest/QuestResultView02";size_t len=strlen(expected);
     if((size_t)file->size!=len && (size_t)file->size!=len+7)return false;
-    for(size_t i=0;i<len;i++)if((file->text[i]=='\\'?'/':file->text[i])!=expected[i])return false;
+    for(size_t i=0;i<len;i++) {
+        char ch=file->text[i]=='\\'?'/':file->text[i];
+        if(i==len-1) {if(ch!='1' && ch!='2')return false;}
+        else if(ch!=expected[i])return false;
+    }
     if((size_t)file->size>len && memcmp(file->text+len,".pactex",7))return false;
     struct ex_tree *children=pact_branch(root,"子パーツ");if(!children)return false;
     struct pact_reader check={0};const char *names[]={"CaptionRoute","RouteBase","RouteNumber"};

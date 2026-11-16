@@ -153,6 +153,8 @@ int vm_current_function_number(void)
 	return call_stack_ptr > 0 ? call_stack[call_stack_ptr - 1].fno : -1;
 }
 
+#include "vm_original_gamepad.inc"
+
 size_t vm_active_frame_count(void)
 {return call_stack_ptr>=0 && call_stack_ptr<=4096?(size_t)call_stack_ptr:0;}
 int vm_active_frame_page(size_t index)
@@ -643,11 +645,29 @@ void r03mod_call_setter(int fno, int object, int value)
 
 static void function_return(void)
 {
+	struct function_call *frame = &call_stack[call_stack_ptr-1];
+	int constructed = -1;
+	/* A restored AIN11+ NEW has no native execute_instruction() activation
+	 * left to push its result. resume12 converts that constructor's native
+	 * sentinel into the bytecode continuation. Preserve the original NEW
+	 * ownership and deliver its receiver when the constructor returns. */
+	if (ain->version >= 11 && frame->call_address < ain->code_size &&
+		instruction_width(NEW) < ain->code_size - frame->call_address &&
+		get_opcode(frame->call_address) == NEW &&
+		frame->return_address == frame->call_address + instruction_width(NEW) &&
+		LittleEndian_getDW(ain->code, frame->call_address + 6) == frame->fno) {
+		constructed = frame->struct_page;
+	}
 	r03mod_return();
 	r10mod_return();
 	unref_call_frame(&call_stack[call_stack_ptr-1]);
 	instr_ptr = call_stack[call_stack_ptr-1].return_address;
 	call_stack_ptr--;
+	if (constructed >= 0) {
+		if (!page_index_valid(constructed))
+			VM_ERROR("Restored NEW object was released during construction");
+		stack_push(constructed);
+	}
 }
 
 static const SDL_MessageBoxButtonData ok_cancel_buttons[] = {

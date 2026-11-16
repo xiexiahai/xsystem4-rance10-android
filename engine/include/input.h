@@ -157,6 +157,15 @@ void mouse_set_pos(int x, int y);
 void mouse_get_wheel(int *forward, int *back);
 void mouse_clear_wheel(void);
 bool mouse_show_cursor(bool show);
+/* Opt-in Rance10 Android pointer adapter; legacy SACT joypad mode is separate. */
+bool input_gamepad_mouse_enabled(void);
+bool input_gamepad_native_enabled(void);
+int input_gamepad_native_count(void);
+bool input_gamepad_native_key(int device, int code);
+void input_gamepad_native_clear_capture(void);
+bool input_gamepad_cursor(int *x, int *y);
+void input_open_controllers(void);
+void input_close_controllers(void);
 bool input_claim_text_handlers(void(*text)(const char*),void(*editing)(const char*,int,int),void(*key)(int));
 bool input_owns_text_handlers(void(*text)(const char*),void(*editing)(const char*,int,int),void(*key)(int));
 bool input_release_text_handlers(void(*text)(const char*),void(*editing)(const char*,int,int),void(*key)(int));

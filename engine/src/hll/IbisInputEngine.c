@@ -35,19 +35,23 @@ HLL_QUIET_UNIMPLEMENTED(, void, IbisInputEngine, Mouse_HideByStepMessage);
 
 static void IbisInputEngine_Joystick_ClearCaptureFlag(void)
 {
-	// TODO
+	/* A frame-capture boundary, not a release of physically held buttons. */
+	input_gamepad_native_clear_capture();
 }
 
-//int IbisInputEngine_Joystick_GetNumofDevice(void);
-HLL_WARN_UNIMPLEMENTED(0, int,  IbisInputEngine, Joystick_GetNumofDevice);
+static int IbisInputEngine_Joystick_GetNumofDevice(void)
+{
+	return input_gamepad_native_count();
+}
 
 bool IbisInputEngine_Joystick_IsKeyDown(int DeviceNumber, int JoystickCode)
 {
-	// TODO
-	return false;
+	return input_gamepad_native_key(DeviceNumber, JoystickCode);
 }
 
 //float IbisInputEngine_Joystick_GetAxis(int DeviceNumber, int AxisType);
+/* Rance10's original AIN has no CALLHLL to this import: directions reach the
+ * logical button interface above. Do not invent an unverified AxisType ABI. */
 HLL_WARN_UNIMPLEMENTED(0.0, float, IbisInputEngine, Joystick_GetAxis, int dev, int axis);
 
 HLL_LIBRARY(IbisInputEngine,

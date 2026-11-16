@@ -26,6 +26,7 @@
 struct pact_reader {
 	bool error;
 	bool edit_mode;
+	bool settings_visibility;
 	unsigned nodes;
 	struct string *activity;
 	const struct ex_tree *compat_hidden;
@@ -426,7 +427,8 @@ static bool pact_apply_part(struct pact_reader *r, struct ex_tree *t, int parent
 				number, parent, t->name ? t->name->text : "(null)");
 	}
 	PE_SetZ(number, pact_at(r,t,"座標",2,1));
-	bool hidden=t==r->compat_hidden;
+	bool hidden=t==r->compat_hidden ||
+		(r->settings_visibility && !pact_num(r,t,"エディタ上表示",1));
 	for(int i=0;i<3;i++)hidden|=t==r->compat_unused_route[i];
 	PE_SetShow(number, hidden ? false : pact_num(r,t,"表示",1));
 	int speed_up = pact_num(r,t,"スピードアップ有効",1);
@@ -722,6 +724,7 @@ bool PE_ReadActivityFileEx(struct string *name, struct string *filename, bool ed
 		return false;
 	}
 	struct pact_reader r = { .activity = name, .edit_mode = edit };
+	r.settings_visibility = !edit && pact_compat_settings_template(filename);
 	struct ex_tree *tree = ex_get_tree(ex, "アクティビティ");
 	struct ex_tree *root = pact_branch(tree, "ルートパーツ");
 	r.compat_hidden = edit ? NULL : pact_compat_new_backup(filename, root);

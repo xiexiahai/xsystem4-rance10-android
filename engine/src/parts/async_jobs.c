@@ -208,6 +208,44 @@ bool parts_async_cancel(struct parts_async_executor *executor, uint64_t id)
 	return true;
 }
 
+bool parts_async_cancel_take(struct parts_async_executor *executor, uint64_t id,
+		struct parts_async_result *out)
+{
+	if (!executor || !out || !id || SDL_LockMutex(executor->mutex) != 0)
+		return false;
+	struct parts_async_job **link = &executor->all;
+	while (*link && (*link)->id != id)
+		link = &(*link)->next_all;
+	struct parts_async_job *job = *link;
+	if (!job) {
+		SDL_UnlockMutex(executor->mutex);
+		return false;
+	}
+	job->cancelled = true;
+	if (job->state == PARTS_ASYNC_RUNNING) {
+		/* prepare() still borrows both the job and its private payload. */
+		SDL_UnlockMutex(executor->mutex);
+		return false;
+	}
+	if (job->state == PARTS_ASYNC_QUEUED) {
+		queue_remove(executor, job);
+		job->ok = false;
+	}
+	*link = job->next_all;
+	if (executor->count > 0)
+		executor->count--;
+	struct parts_async_result result = {
+		.id = job->id,
+		.payload = job->payload,
+		.ok = job->ok,
+		.cancelled = true,
+	};
+	SDL_UnlockMutex(executor->mutex);
+	free(job);
+	*out = result;
+	return true;
+}
+
 bool parts_async_take(struct parts_async_executor *executor,
 		struct parts_async_result *out)
 {

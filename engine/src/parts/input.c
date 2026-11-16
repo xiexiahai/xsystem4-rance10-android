@@ -29,6 +29,7 @@ bool PE_IsActivityOpen(const char *prefix);
 #include "vm.h"
 #include "xsystem4.h"
 #include "parts_internal.h"
+#include <math.h>
 #include "../ain12_drag_capability.inc"
 #include "swipe_gesture.h"
 
@@ -161,6 +162,28 @@ static bool parts_hittest(struct parts *parts, int state, Point pos)
 	if (parts->states[state].type==PARTS_FLAT && !parts->widget
 			&& parts_flat_hittest(parts,state,pos,&hit)) return hit;
 	Rectangle hitbox = parts->states[state].common.hitbox;
+	enum parts_type type=parts->states[state].type;
+	/* These components share parts_render_cg's bitmap transform. */
+	bool bitmap=type==PARTS_CG || type==PARTS_ANIMATION || type==PARTS_NUMERAL ||
+		type==PARTS_HGAUGE || type==PARTS_VGAUGE || type==PARTS_CONSTRUCTION_PROCESS || type==PARTS_MOVIE;
+	if (ain && ain->version>=11 && !parts->widget &&
+			bitmap &&
+			(parts->global.scale.x!=1.f || parts->global.scale.y!=1.f || parts->local.rotation.z!=0.f)) {
+		/* Plane images use a 2x2 texture stretched to the window size. A
+		 * transition shield must intercept its rendered area, not just those
+		 * two source pixels. Match parts_render_cg's transform, including crop
+		 * origin, inherited scale, local rotation, and committed scroll/parent
+		 * position. FLAT and widget input retain their own geometry contracts. */
+		double sx=parts->global.scale.x,sy=parts->global.scale.y;
+		double angle=parts->local.rotation.z*0.017453292519943295;
+		if (!isfinite(sx) || !isfinite(sy) || !isfinite(angle) || !sx || !sy) return false;
+		double dx=(double)pos.x-parts->global.pos.x,dy=(double)pos.y-parts->global.pos.y;
+		double x=dx,y=dy;
+		if (angle) {double c=cos(angle),s=sin(angle);x=dx*c+dy*s;y=-dx*s+dy*c;}
+		x/=sx;y/=sy;
+		double left=(double)hitbox.x-parts->local.pos.x,top=(double)hitbox.y-parts->local.pos.y;
+		return x>=left && x<left+hitbox.w && y>=top && y<top+hitbox.h;
+	}
 	hitbox.x-=parts_scroll_link_pos(parts,0);hitbox.y-=parts_scroll_link_pos(parts,1);
 	if (parts->parent) {
 		Point origin=parts_child_origin(parts->parent);

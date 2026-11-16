@@ -204,6 +204,11 @@ bool keyboard_focus = true;
 
 #define MAX_CONTROLLERS 4
 static SDL_GameController *controllers[MAX_CONTROLLERS];
+static bool r10_pad_key_down(int code);
+static void r10_pad_clear_keys(bool no_ctrl);
+static bool r10_pad_mouse_event(SDL_MouseButtonEvent *event);
+static void r10_pad_cancel_mouse(void);
+static bool r10_pad_set_pos(int x, int y);
 
 #ifdef __ANDROID__
 struct deferred_keyevent {
@@ -257,11 +262,12 @@ bool key_is_down(enum sact_keycode code)
 	if (code < 0 || code >= VK_NR_KEYCODES) {
 		return false;
 	}
-	return key_state[code];
+	return key_state[code] || r10_pad_key_down(code);
 }
 
 void key_clear_flag(bool no_ctrl)
 {
+	r10_pad_clear_keys(no_ctrl);
 	for (int i = 0; i < VK_NR_KEYCODES; i++) {
 		if (no_ctrl && i == VK_CONTROL)
 			continue;
@@ -281,6 +287,7 @@ void mouse_get_pos(int *x, int *y)
 		wx = mouse_sample_pos.x;
 		wy = mouse_sample_pos.y;
 	} else {
+		if (input_gamepad_cursor(x, y)) return;
 		SDL_GetMouseState(&wx, &wy);
 	}
 	*x = (wx - sdl.viewport.x) * sdl.w / sdl.viewport.w;
@@ -289,6 +296,7 @@ void mouse_get_pos(int *x, int *y)
 
 void mouse_set_pos(int x, int y)
 {
+	if (r10_pad_set_pos(x, y)) return;
 	int wx = x * sdl.viewport.w / sdl.w + sdl.viewport.x;
 	int wy = y * sdl.viewport.h / sdl.h + sdl.viewport.y;
 	SDL_WarpMouseInWindow(sdl.window, wx, wy);
@@ -330,6 +338,7 @@ static void mouse_event(SDL_MouseButtonEvent *e)
 {
 	if (e->state == SDL_PRESSED)
 		perf_window_mouse_press();
+	if (r10_pad_mouse_event(e)) return;
 	enum sact_keycode code = sdl_to_sact_button(e->button);
 	if (code)
 		key_state[code] = e->state == SDL_PRESSED;
@@ -397,6 +406,7 @@ static void clear_mouse_samples(void)
 static void cancel_mouse_samples(void)
 {
 	clear_mouse_samples();
+	r10_pad_cancel_mouse();
 	deferred_synthetic_mouse_event.timestamp = 0;
 	key_state[VK_LBUTTON] = key_state[VK_RBUTTON] = key_state[VK_MBUTTON] = false;
 	mouse_sample_cancelled = true;
@@ -582,6 +592,8 @@ static float joy_calc_trigger(int left, int right)
 
 bool joy_get_stick_status(int controller, int type, float *deg, float *pow)
 {
+	if (input_gamepad_mouse_enabled() || controller < 0 || controller >= MAX_CONTROLLERS)
+		goto invalid;
 	SDL_GameController *ctrl = controllers[controller];
 	if (!ctrl)
 		goto invalid;
@@ -666,8 +678,11 @@ static void controller_axis_event(SDL_ControllerAxisEvent *e)
 
 static void controller_button_event(SDL_ControllerButtonEvent *e)
 {
-	joybutton_state[e->button] = e->state == SDL_PRESSED;
+	if (e->button < SDL_CONTROLLER_BUTTON_MAX)
+		joybutton_state[e->button] = e->state == SDL_PRESSED;
 }
+
+#include "rance10_gamepad.inc"
 
 void register_input_handler(void(*handler)(const char*))
 {
@@ -761,6 +776,8 @@ static void handle_window_event(SDL_Event *e)
 		break;
 	case SDL_WINDOWEVENT_FOCUS_LOST:
 		keyboard_focus = false;
+		r10_pad_reset();
+		key_clear_flag(false);
 		cancel_mouse_samples();
 		long_touch_start_timestamp = 0;
 		break;
@@ -773,8 +790,29 @@ static void handle_window_event(SDL_Event *e)
 
 void handle_window_events(void)
 {
+	r10_pad_sync_context();
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
+		if (r10_pad_window_event(&e)) continue;
+		r10_pad_pointer_event(&e);
+		if (input_gamepad_mouse_enabled()) {
+			if (e.type == SDL_CONTROLLERBUTTONUP) {r10_pad_button_event(&e.cbutton);continue;}
+			if (input_gamepad_native_enabled() && e.type == SDL_CONTROLLERBUTTONDOWN &&
+					e.cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) {
+				r10_pad_button_event(&e.cbutton); continue;
+			}
+			/* Original dialogue/movie owners poll Ibis directly. Capture their
+			 * native buttons even during animation polling; pointer emulation
+			 * remains disabled here, as before. */
+			if (input_gamepad_native_enabled() && r10_pad.context == VM_PAD_ORIGINAL) {
+				if (e.type == SDL_CONTROLLERBUTTONDOWN && r10_pad_original_button(e.cbutton.button)) {
+					r10_pad_button_event(&e.cbutton); continue;
+				}
+				if (e.type == SDL_CONTROLLERAXISMOTION) {r10_pad_axis_event(&e.caxis);continue;}
+			}
+			if (e.type == SDL_KEYUP) {key_event(&e.key, false);continue;}
+			if (e.type == SDL_CONTROLLERDEVICEADDED) {input_open_controller(e.cdevice.which);continue;}
+		}
 		switch (e.type) {
 		case SDL_QUIT:
 			if(input_hook_close_request())break;
@@ -1083,6 +1121,7 @@ static void diag_test_drag(void)
 
 void handle_events(void)
 {
+	r10_pad_sync_context();
 	perf_window_poll();
 	diag_autokey();
 	diag_autoclick();
@@ -1093,6 +1132,8 @@ void handle_events(void)
 
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
+		if (r10_pad_window_event(&e)) continue;
+		r10_pad_pointer_event(&e);
 		switch (e.type) {
 		case SDL_QUIT:
 			if(input_hook_close_request())break;
@@ -1150,6 +1191,8 @@ void handle_events(void)
 		case SDL_MOUSEWHEEL:
 			wheel_dir = e.wheel.y;
 			break;
+		case SDL_MOUSEMOTION:
+			break;
 		case SDL_FINGERDOWN:
 			if (SDL_GetNumTouchFingers(e.tfinger.touchId) >= 2) {
 				// The user is about to start a multi-touch gesture.
@@ -1190,15 +1233,19 @@ void handle_events(void)
 			}
 			break;
 		case SDL_CONTROLLERDEVICEADDED:
-			if (e.cdevice.which >= 0 && e.cdevice.which < MAX_CONTROLLERS)
-				controllers[e.cdevice.which] = SDL_GameControllerOpen(e.cdevice.which);
+			input_open_controller(e.cdevice.which);
+			break;
+		case SDL_CONTROLLERDEVICEREMOVED:
+			input_remove_controller(e.cdevice.which);
 			break;
 		case SDL_CONTROLLERAXISMOTION:
-			controller_axis_event(&e.caxis);
+			if (input_gamepad_mouse_enabled()) r10_pad_axis_event(&e.caxis);
+			else controller_axis_event(&e.caxis);
 			break;
 		case SDL_CONTROLLERBUTTONUP:
 		case SDL_CONTROLLERBUTTONDOWN:
-			controller_button_event(&e.cbutton);
+			if (input_gamepad_mouse_enabled()) r10_pad_button_event(&e.cbutton);
+			else controller_button_event(&e.cbutton);
 			break;
 		case SDL_TEXTINPUT:
 			if (!input_handler) {
@@ -1222,6 +1269,7 @@ void handle_events(void)
 			break;
 		}
 	}
+	r10_pad_update(SDL_GetTicks());
 	if (dbg_dap)
 		dbg_dap_handle_messages();
 }

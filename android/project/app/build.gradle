@@ -1,0 +1,137 @@
+def buildAsLibrary = project.hasProperty('BUILD_AS_LIBRARY');
+def buildAsApplication = !buildAsLibrary
+def bundledGame = project.hasProperty('BUNDLED_GAME')
+def modGame = project.hasProperty('RANCE03_MOD')
+def rance03Adapter = project.hasProperty('RANCE03_ADAPTER')
+def rance10Cheats = project.hasProperty('RANCE10_CHEATS')
+def rance10Development = project.hasProperty('RANCE10_DEVELOPMENT')
+if (rance10Cheats && (modGame || rance03Adapter))
+    throw new GradleException('RANCE10_CHEATS must not combine with the Rance03 variants')
+if (rance03Adapter && bundledGame) throw new GradleException('RANCE03_ADAPTER is resource-free; do not combine it with BUNDLED_GAME')
+if (modGame && !bundledGame) throw new GradleException('RANCE03_MOD requires BUNDLED_GAME')
+if (rance10Development && (bundledGame || modGame || rance03Adapter))
+    throw new GradleException('RANCE10_DEVELOPMENT is a resource-free Rance10 build; do not combine it with bundled/Rance03 variants')
+if (bundledGame) buildDir = file(modGame ? 'build-bundled-mod' : 'build-bundled')
+if (rance03Adapter) buildDir = file('build-rance03-adapter')
+if (rance10Cheats) buildDir = file('build-rance10-cheats')
+if (rance10Development) buildDir = file(rance10Cheats ? 'build-rance10-development-cheats' : 'build-rance10-development')
+if (bundledGame && !modGame && System.getenv('RANCE10_BUILD_ROOT'))
+    buildDir = new File(System.getenv('RANCE10_BUILD_ROOT'), rance10Cheats ? 'cheat' : 'normal')
+if (buildAsApplication) {
+    apply plugin: 'com.android.application'
+}
+else {
+    apply plugin: 'com.android.library'
+}
+apply plugin: 'kotlin-android'
+
+android {
+    if (buildAsApplication) {
+        namespace "io.github.kichikuou.xsystem4"
+    }
+    compileSdkVersion 34
+    ndkVersion "26.3.11579264"
+    buildFeatures { buildConfig true }
+    defaultConfig {
+        if (buildAsApplication) {
+            applicationId rance10Development ? (rance10Cheats ? 'io.github.xiexiahai.rance10.development.cheats' : 'io.github.xiexiahai.rance10.development') :
+                (rance10Cheats ? 'io.github.xiexiahai.rance10.cheats' : 'io.github.xiexiahai.rance10.prototype')
+        }
+        // A bundled build carries the game inside the APK: the external-resource
+        // launcher would look for a files/game directory that does not exist.
+        manifestPlaceholders = [externalLauncherEnabled: !bundledGame, bundledLauncherEnabled: bundledGame,
+                                applicationLabel: rance10Development ? (rance10Cheats ? '兰斯10 dev cheat' : '兰斯10 dev') : (rance10Cheats ? '兰斯10 cheat' : '兰斯10'),
+                                licenseParent: bundledGame ? '.BundledLauncherActivity' : '.Rance10LauncherActivity']
+        minSdkVersion 21
+        targetSdkVersion 34
+        // So that stripReleaseDebugSymbols task works
+        ndkPath System.getenv("ANDROID_NDK_HOME")
+        versionCode 145
+        versionName rance10Cheats ? "1.0.5-cheat" : "1.0.5"
+        buildConfigField 'boolean', 'RANCE10_CHEATS', rance10Cheats.toString()
+        buildConfigField 'boolean', 'RANCE10_DEVELOPMENT', rance10Development.toString()
+        if (rance10Development) {
+            versionCode Integer.parseInt(project.findProperty('DEVELOPMENT_VERSION_CODE') ?: '1')
+            versionName rance10Cheats ? '1.0.5-dev-cheats' : '1.0.5-dev'
+        }
+    }
+    sourceSets.main.java.srcDir(rance10Cheats ? 'src/rance10cheats/java' : modGame ? 'src/mod/java' : 'src/normal/java')
+    if (rance10Cheats) {
+        def cheatJni = rootProject.file('../cheats-jni')
+        for (library in ['libxsystem4.so', 'libSDL2.so', 'libcglm.so']) {
+            if (!new File(cheatJni, "arm64-v8a/${library}").isFile())
+                throw new GradleException("Build the separate Rance10 cheat native libraries first: missing ${library}")
+        }
+        sourceSets.main.jniLibs.setSrcDirs([cheatJni])
+    }
+    if (modGame) {
+        def modJni = rootProject.file('../../../work/mod-jni')
+        if (!new File(modJni, 'arm64-v8a/libxsystem4.so').isFile())
+            throw new GradleException('Build the separate MOD native library first')
+        sourceSets.main.jniLibs.setSrcDirs([modJni])
+    }
+    if (rance10Development && System.getenv('RANCE10_NATIVE_DIR')) {
+        def nativeDirectory = new File(System.getenv('RANCE10_NATIVE_DIR'))
+        for (library in ['libxsystem4.so', 'libSDL2.so', 'libcglm.so']) {
+            if (!new File(nativeDirectory, "arm64-v8a/${library}").isFile())
+                throw new GradleException("Missing development native library: ${library}")
+        }
+        sourceSets.main.jniLibs.setSrcDirs([nativeDirectory])
+    }
+    if (bundledGame) {
+        androidResources {
+            noCompress += ['afa', 'apeg', 'ap2', 'ain', 'ex', 'wav', 'ogg', 'mp3', 'mpg', 'mp4', 'webm']
+        }
+        def payload = new File(System.getenv('BUNDLED_ASSETS') ?:
+            rootProject.file('../../work/standalone-assets').absolutePath)
+        if (!new File(payload, 'bundled-game.json').isFile())
+            throw new GradleException('Run tools/prepare-bundled-game.py before building BUNDLED_GAME')
+        // The dedicated Chinese game only loads Noto; retain all fallback
+        // fonts in the generic launcher. Preparation hardlinks all other assets.
+        def engineAssets = new File(System.getenv('BUNDLED_ENGINE_ASSETS') ?:
+            rootProject.file('../../work/standalone-engine-assets').absolutePath)
+        sourceSets.main.assets.setSrcDirs([engineAssets, payload])
+    }
+    signingConfigs {
+        release {
+            storeFile rootProject.file('keystore.jks')
+            storePassword System.getenv('KEYSTORE_PASSWORD')
+            keyAlias System.getenv('KEY_ALIAS')
+            keyPassword System.getenv('KEY_PASSWORD')
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (rootProject.file('keystore.jks').exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+    lint {
+        abortOnError false
+    }
+
+    if (buildAsLibrary) {
+        libraryVariants.all { variant ->
+            variant.outputs.each { output ->
+                def outputFile = output.outputFile
+                if (outputFile != null && outputFile.name.endsWith(".aar")) {
+                    def fileName = "org.libsdl.app.aar";
+                    output.outputFile = new File(outputFile.parent, fileName);
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4'
+}
+
+static String gitRevision() {
+    ' (git ' + "git rev-parse --short HEAD".execute().text.trim() + ')'
+}

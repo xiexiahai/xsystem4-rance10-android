@@ -17,12 +17,14 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
+import android.os.SystemClock;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
@@ -324,6 +326,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         Log.v(TAG, "Model: " + Build.MODEL);
         Log.v(TAG, "onCreate()");
         super.onCreate(savedInstanceState);
+        r10CtrlOverlayReadyAt = SystemClock.uptimeMillis() + 2000;
 
         try {
             Thread.currentThread().setName("SDLActivity");
@@ -456,6 +459,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     @Override
     protected void onPause() {
         Log.v(TAG, "onPause()");
+        hideCtrlOverlay();
         super.onPause();
 
         if (mHIDDeviceManager != null) {
@@ -545,6 +549,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
            nativeFocusChanged(true);
 
         } else {
+           hideCtrlOverlay();
            nativeFocusChanged(false);
            if (!mHasMultiWindow) {
                mNextNativeState = NativeState.PAUSED;
@@ -583,6 +588,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     @Override
     protected void onDestroy() {
         Log.v(TAG, "onDestroy()");
+        hideCtrlOverlay();
 
         if (mHIDDeviceManager != null) {
             HIDDeviceManager.release(mHIDDeviceManager);
@@ -676,16 +682,50 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
     }
 
     private Button r10CtrlOverlay;
+    private boolean r10CtrlPressed;
+    private int r10CtrlPointerId = -1;
+    private long r10CtrlOverlayReadyAt;
+
+    private void setCtrlOverlayPressed(boolean pressed) {
+        if (r10CtrlPressed == pressed || (pressed && (mBrokenLibraries || mSDLThread == null))) {
+            return;
+        }
+        r10CtrlPressed = pressed;
+        if (r10CtrlOverlay != null) {
+            r10CtrlOverlay.setPressed(pressed);
+        }
+        if (!mBrokenLibraries) {
+            dispatchKeyEvent(new KeyEvent(pressed ? KeyEvent.ACTION_DOWN : KeyEvent.ACTION_UP,
+                    KeyEvent.KEYCODE_CTRL_LEFT));
+        }
+    }
+
+    private void hideCtrlOverlay() {
+        // Hiding, leaving the app or losing a touch must not leave SKIP held.
+        setCtrlOverlayPressed(false);
+        r10CtrlPointerId = -1;
+        if (r10CtrlOverlay != null) {
+            r10CtrlOverlay.setVisibility(View.GONE);
+        }
+    }
 
     /** Called from native code when the user taps the letterbox area. */
     public void toggleCtrlOverlay() {
+        final long requestedAt = SystemClock.uptimeMillis();
         runOnUiThread(() -> {
+            if (requestedAt < r10CtrlOverlayReadyAt || isFinishing() || mBrokenLibraries ||
+                    !mHasFocus || !mIsResumedCalled) {
+                return;
+            }
             if (r10CtrlOverlay == null) {
                 createCtrlOverlay();
             }
             if (r10CtrlOverlay != null) {
-                r10CtrlOverlay.setVisibility(
-                        r10CtrlOverlay.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                if (r10CtrlOverlay.getVisibility() == View.VISIBLE) {
+                    hideCtrlOverlay();
+                } else {
+                    r10CtrlOverlay.setVisibility(View.VISIBLE);
+                }
             }
         });
     }
@@ -695,30 +735,59 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         button.setText("Ctrl");
         button.setTextSize(16);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackgroundColor(0x99000000);
+        button.setAllCaps(false);
+        button.setGravity(Gravity.CENTER);
+        button.setIncludeFontPadding(false);
+        button.setMinWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumWidth(0);
+        button.setMinimumHeight(0);
+        button.setPadding(0, 0, 0, 0);
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0x99000000);
+        background.setCornerRadius(12 * density);
+        background.setStroke(Math.max(1, (int)density), 0x88FFFFFF);
+        button.setBackground(background);
+        if (Build.VERSION.SDK_INT >= 21) {
+            button.setBackgroundTintList(null);
+            button.setStateListAnimator(null);
+            button.setElevation(0);
+        }
         button.setFocusable(false);
         button.setFocusableInTouchMode(false);
         button.setOnTouchListener((view, event) -> {
             switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT));
+                r10CtrlPointerId = event.getPointerId(event.getActionIndex());
+                setCtrlOverlayPressed(true);
                 return true;
             case MotionEvent.ACTION_UP:
+                setCtrlOverlayPressed(false);
+                r10CtrlPointerId = -1;
+                view.performClick();
+                return true;
+            case MotionEvent.ACTION_POINTER_UP:
+                if (event.getPointerId(event.getActionIndex()) == r10CtrlPointerId) {
+                    setCtrlOverlayPressed(false);
+                    r10CtrlPointerId = -1;
+                }
+                return true;
             case MotionEvent.ACTION_CANCEL:
-                dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT));
+                setCtrlOverlayPressed(false);
+                r10CtrlPointerId = -1;
                 return true;
             default:
-                return false;
+                return true;
             }
         });
-        int margin = (int)(8 * getResources().getDisplayMetrics().density);
+        int margin = (int)(8 * density);
         android.widget.FrameLayout.LayoutParams params = new android.widget.FrameLayout.LayoutParams(
-                (int)(64 * getResources().getDisplayMetrics().density),
-                (int)(48 * getResources().getDisplayMetrics().density));
+                (int)(64 * density), (int)(48 * density));
         params.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
         params.rightMargin = margin;
-        addContentView(button, params);
         button.setVisibility(View.GONE);
+        addContentView(button, params);
         r10CtrlOverlay = button;
     }
 

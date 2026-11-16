@@ -223,8 +223,11 @@ void parts_flat_async_reset(void)
 
 void parts_flat_async_cancel_state(struct parts_state *state)
 {
-	if (state->async_ticket && flat_executor)
-		parts_async_cancel(flat_executor,state->async_ticket);
+	if (state->async_ticket && flat_executor) {
+		struct parts_async_result result;
+		if (parts_async_cancel_take(flat_executor,state->async_ticket,&result))
+			flat_request_free(result.payload);
+	}
 	state->async_ticket=0;
 }
 

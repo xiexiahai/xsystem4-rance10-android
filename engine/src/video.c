@@ -32,6 +32,7 @@
 #include "gfx/gfx.h"
 #include "gfx/private.h"
 #include "icon.h"
+#include "input.h"
 #include "xsystem4.h"
 
 struct sdl_private sdl;
@@ -69,6 +70,40 @@ static struct shader default_shader;
 static GLuint main_surface_fb;
 /* Empty between reads: never retain a parked texture attachment. */
 static GLuint readback_fb;
+static Texture gamepad_cursor_texture;
+/* Context-local FBO reuse, informed by TomorrowX6/AliceHub (6382509).
+ * Lease distinct objects to nested callers; never retain color attachments
+ * between scopes. Overflow preserves the original temporary-object path. */
+#define GFX_FRAMEBUFFER_CACHE_SIZE 4
+static struct {
+	GLuint handle;
+	bool leased;
+} framebuffer_cache[GFX_FRAMEBUFFER_CACHE_SIZE];
+
+static void framebuffer_cache_clear(void)
+{
+	for (unsigned i=0;i<GFX_FRAMEBUFFER_CACHE_SIZE;i++) {
+		if (framebuffer_cache[i].handle)
+			glDeleteFramebuffers(1,&framebuffer_cache[i].handle);
+	}
+	memset(framebuffer_cache,0,sizeof(framebuffer_cache));
+}
+
+static GLuint framebuffer_acquire(void)
+{
+	for (unsigned i=0;i<GFX_FRAMEBUFFER_CACHE_SIZE;i++) {
+		if (framebuffer_cache[i].leased)
+			continue;
+		if (!framebuffer_cache[i].handle)
+			glGenFramebuffers(1,&framebuffer_cache[i].handle);
+		framebuffer_cache[i].leased=true;
+		return framebuffer_cache[i].handle;
+	}
+	GLuint handle;
+	glGenFramebuffers(1,&handle);
+	return handle;
+}
+
 static struct texture main_surface;
 static struct texture *view = &main_surface;
 static GLint max_texture_size;
@@ -151,6 +186,8 @@ static int gl_initialize(void)
 {
 	/* A new graphics context owns a new framebuffer namespace. */
 	readback_fb = 0;
+	memset(&gamepad_cursor_texture, 0, sizeof(gamepad_cursor_texture));
+	memset(framebuffer_cache,0,sizeof(framebuffer_cache));
 	geometry_layout_count = 0; // Object names belong to this GL context only.
 	geometry_cache_enabled = !getenv("XSYSTEM4_DISABLE_GEOMETRY_CACHE");
 	gfx_load_shader(&default_shader, "shaders/render.v.glsl", "shaders/render.f.glsl");
@@ -245,10 +282,11 @@ int gfx_init(void)
 		return true;
 
 	uint32_t flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO;
-	if (config.joypad)
+	if (config.joypad || input_gamepad_mouse_enabled())
 		flags |= SDL_INIT_GAMECONTROLLER;
 	if (SDL_Init(flags) < 0)
 		ERROR("SDL_Init failed: %s", SDL_GetError());
+	if (flags & SDL_INIT_GAMECONTROLLER) input_open_controllers();
 
 #ifdef USE_GLES
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -298,6 +336,9 @@ int gfx_init(void)
 
 void gfx_fini(void)
 {
+	input_close_controllers();
+	gfx_delete_texture(&gamepad_cursor_texture);
+	framebuffer_cache_clear();
 	if (readback_fb) {
 		glDeleteFramebuffers(1, &readback_fb);
 		readback_fb = 0;
@@ -503,6 +544,33 @@ static void diag_autoshot(void)
 	}
 }
 
+static void draw_gamepad_cursor(GLfloat *view_transform)
+{
+	int x, y;
+	if (!input_gamepad_cursor(&x, &y)) return;
+	if (!gamepad_cursor_texture.handle) {
+		static const char shape[20][17] = {
+			"X", "XX", "XWX", "XWWX", "XWWWX", "XWWWWX", "XWWWWWX",
+			"XWWWWWWX", "XWWWWWWWX", "XWWWWWWWWX", "XWWWWWWWWWX",
+			"XWWWWWWWWWWX", "XWWWWWXXXXXX", "XWWXWWX", "XWX XWWX",
+			"XX  XWWX", "X    XWWX", "     XWWX", "      XX", ""
+		};
+		uint8_t pixels[20][16][4] = {{{0}}};
+		for (int row = 0; row < 20; row++) for (int col = 0; col < 16; col++) {
+			if (shape[row][col] != 'X' && shape[row][col] != 'W') continue;
+			uint8_t color = shape[row][col] == 'W' ? 255 : 0;
+			pixels[row][col][0] = pixels[row][col][1] = pixels[row][col][2] = color;
+			pixels[row][col][3] = 255;
+		}
+		gfx_init_texture_with_pixels(&gamepad_cursor_texture, 16, 20, pixels);
+	}
+	mat4 world = WORLD_TRANSFORM(32.f / sdl.w, 40.f / sdl.h, (float)x / sdl.w, (float)y / sdl.h);
+	struct gfx_render_job job = {.shader = &default_shader, .shape = GFX_RECTANGLE,
+		.texture = gamepad_cursor_texture.handle, .world_transform = world[0],
+		.view_transform = view_transform, .data = &gamepad_cursor_texture};
+	gfx_render(&job);
+}
+
 void gfx_swap(void)
 {
 	diag_autoshot();
@@ -525,6 +593,8 @@ void gfx_swap(void)
 	};
 	gfx_render(&job);
 
+	/* Display-only overlay: never bake the pointer into a scene/save snapshot. */
+	draw_gamepad_cursor(wv_transform[0]);
 	SDL_GL_SwapWindow(sdl.window);
 	glBindFramebuffer(GL_FRAMEBUFFER, main_surface_fb);
 	glViewport(0, 0, sdl.w, sdl.h);
@@ -883,8 +953,9 @@ void gfx_delete_texture(struct texture *t)
 
 GLuint gfx_set_framebuffer(GLenum target, Texture *t, int x, int y, int w, int h)
 {
-	GLuint fbo;
-	glGenFramebuffers(1, &fbo);
+	GLuint fbo=framebuffer_acquire();
+	if (!fbo)
+		ERROR("Could not allocate offscreen framebuffer");
 	glBindFramebuffer(target, fbo);
 	glFramebufferTexture2D(target, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->handle, 0);
 	glViewport(x, y, w, h);
@@ -896,8 +967,20 @@ GLuint gfx_set_framebuffer(GLenum target, Texture *t, int x, int y, int w, int h
 
 void gfx_reset_framebuffer(GLenum target, GLuint fbo)
 {
+	/* Do not let an idle cached FBO keep a parked/deleted texture alive. */
+	glBindFramebuffer(target, fbo);
+	glFramebufferTexture2D(target, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
 	glBindFramebuffer(target, main_surface_fb);
-	glDeleteFramebuffers(1, &fbo);
+	bool cached=false;
+	for (unsigned i=0;i<GFX_FRAMEBUFFER_CACHE_SIZE;i++) {
+		if (framebuffer_cache[i].handle==fbo) {
+			framebuffer_cache[i].leased=false;
+			cached=true;
+			break;
+		}
+	}
+	if (!cached)
+		glDeleteFramebuffers(1, &fbo);
 	glViewport(0, 0, sdl.w, sdl.h);
 }
 

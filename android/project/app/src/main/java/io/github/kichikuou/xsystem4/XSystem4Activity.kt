@@ -33,6 +33,10 @@ class XSystem4Activity : SDLActivity() {
         // Offline build: online features stay disabled. Interactive game
         // confirmations remain enabled unless an explicit headless probe opts out.
         SDLActivity.nativeSetenv("XSYSTEM4_TEST_REJECT_NETWORK", "1")
+        if (BuildConfig.APPLICATION_ID.startsWith("io.github.xiexiahai.rance10.")) {
+            SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_GAMEPAD", "1")
+            SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_NATIVE_PAD", "1")
+        }
         Rance10Diagnostics.apply(intent)
         if (intent.getBooleanExtra("NO_DIALOG_DIAGNOSTIC", false))
             SDLActivity.nativeSetenv("XSYSTEM4_NO_DIALOG", "1")

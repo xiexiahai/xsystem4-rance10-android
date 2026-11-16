@@ -173,19 +173,26 @@ class BundledLauncherActivity : Activity() {
         else
             SaveProfile.select(preferences.getString(profileKey, null), null, exists)
         val save = File(filesDir, relative)
-        if (!save.isDirectory && !save.mkdirs()) {
-            status.text = "无法创建存档目录，请清理空间后重试。"
+        try {
+            if (!save.isDirectory && !save.mkdirs())
+                throw java.io.IOException("Cannot create selected save directory")
+            // Explicit probe profiles retain their identity, even when empty.
+            // A failed copy must not publish a partially imported main profile.
+            if (relative == SaveProfile.MAIN || relative == SaveProfile.CHEAT_MAIN)
+                LegacySaveImport.copyIfEmpty(File(filesDir, "SaveData"), save)
+        } catch (e: Exception) {
+            Log.e("BundledGame", "Save preparation failed", e)
+            launched = false
+            showUi()
+            status.text = "无法准备存档目录。旧存档未被覆盖，请确认空间和存储状态后重试。"
+            progress.isIndeterminate = false
+            action.visibility = android.view.View.VISIBLE
+            action.isEnabled = true
+            action.text = "重试"
+            action.setOnClickListener { launched = true; launchGame(dir, apkArchives) }
             return
         }
         preferences.edit().putString(profileKey, relative).apply()
-        // Migrate the temporary SaveData used by older bundled builds, but only
-        // when the selected profile is still empty (never overwrite progress).
-        val legacy = File(filesDir, "SaveData")
-        if (legacy.isDirectory && (save.list()?.isEmpty() != false)) {
-            legacy.listFiles()?.forEach { file ->
-                if (file.isFile) runCatching { file.copyTo(File(save, file.name), overwrite = false) }
-            }
-        }
         startActivity(Intent(this, XSystem4Activity::class.java).apply {
             Rance10Diagnostics.forward(this@BundledLauncherActivity, intent, this)
             putExtra(XSystem4Activity.EXTRA_GAME_ROOT, dir.path)

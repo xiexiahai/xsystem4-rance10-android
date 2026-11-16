@@ -53,10 +53,24 @@ See [docs/compatibility.md](docs/compatibility.md) for the status table.
 
 ## Status
 
-Playable for both titles. Current Android release: **1.0.4 (versionCode 144,
-2026-11-11)**.
+Playable for both titles. Current Rance 10 Android version: **1.0.5 (versionCode
+145, 2026-11-17)**. See [1.0.5 release notes](docs/release-1.0.5.md).
 
-Fixed in 1.0.4 (relative to earlier public snapshots):
+Changed in 1.0.5:
+
+* Fix simple-battle defeat/retry resume, overlapping settings controls, and
+  click-through during rapidly opened/closed party-formation transitions.
+* Fix shared condition parsing used by some special battle mechanics, Part 2
+  character-setup label spacing, and incomplete legacy-save imports.
+* Improve safe release of preparation data, framebuffer reuse, and source-image
+  caching with a 4 MiB per-batch budget and cleanup after last use/failure.
+* Connect gamepad input to the original supported menus/dialogues: **right stick
+  cursor**, **left stick navigation/scrolling**, A confirm/click/drag, B cancel,
+  L1 held Ctrl, R1 precision movement. Some pages still use the cursor.
+* Retain the touch Ctrl button on the **right**, with improved layout, accidental
+  touch protection and cancellation/release handling.
+
+Earlier 1.0.4 fixes retained:
 
 * Dialogue MENU can be opened repeatedly (layers erased while the menu was open
   are restored when the menu/window is re-created).
@@ -71,12 +85,16 @@ Fixed in 1.0.4 (relative to earlier public snapshots):
 * Resource budget back-pressure for CG preparation and texture restore
   (reduces load stalls under memory pressure).
 * Touch controls: long-press no longer triggers Ctrl; tapping the left/right
-  letterbox toggles an on-screen Ctrl button instead (button placement is
-  right-side in 1.0.4; moving to the left is planned).
+  letterbox toggles an on-screen Ctrl button instead (right-side placement).
 * Launcher icon updated to the official Rance 10 cover.
 
 Known issues:
 
+* Full on-device acceptance of rapid party-formation transitions, physical
+  controllers and late-game special battles remains open; targeted local tests
+  are not a complete playthrough.
+* The correct activation/assignment of the route-completion display and Alice's
+  mansion content remain under investigation.
 * On long sessions some devices still get progressively slower battle
   pre-loading, and may eventually crash/ANR. Save and resource paths have been
   optimised, but the root cause is not fully confirmed.
@@ -110,7 +128,8 @@ Requirements: Python 3.10+, Meson + Ninja, CMake 3.22, Android NDK r26
 ### Desktop
 
 ```sh
-python tools/build_port.py            # meson setup/build/install into dist/
+mkdir logs
+python tools/build_port.py            # Windows/MSYS2: build/install into dist/
 ```
 
 `MSYS2_ROOT` (default `C:/msys64`) points at the MSYS2 installation.
@@ -118,12 +137,18 @@ python tools/build_port.py            # meson setup/build/install into dist/
 ### Android engine
 
 ```sh
-export XSYSTEM4_ANDROID_TOOLS=/path/to/tools/android
+mkdir logs
+# Windows/MSYS2 helpers; configure XSYSTEM4_ANDROID_TOOLS / ANDROID_* first.
 python tools/build_android_native_local.py            # xsystem4 engine
 python tools/build_android_native.py --cheats         # cheat variant
 ```
 
 `ANDROID_SDK_ROOT` / `ANDROID_NDK_HOME` / `JAVA_HOME` take precedence when set.
+For Linux, [the CI workflow](.github/workflows/build.yml) contains the complete
+CMake invocation, JNI staging and Gradle build steps. It builds a development
+APK without game data. To build the cheat variant, use a separate native build
+directory with `XSYSTEM4_RANCE10_CHEATS=ON`, stage its engine plus SDL2/cglm in
+`android/cheats-jni/arm64-v8a`, then pass `-PRANCE10_CHEATS` to Gradle.
 
 ### Bundled payload + APK
 
@@ -131,6 +156,7 @@ python tools/build_android_native.py --cheats         # cheat variant
 python tools/prepare-bundled-game.py --game "/path/to/Rance10" --movies /path/to/movies
 cd android/project
 ./gradlew assembleDebug -PBUNDLED_GAME       # self-contained APK
+./gradlew assembleDebug -PBUNDLED_GAME -PRANCE10_CHEATS  # separate cheat APK
 ./gradlew assembleDebug                      # dev build (external files/game)
 ```
 
