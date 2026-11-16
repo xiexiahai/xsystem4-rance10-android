@@ -1,0 +1,2 @@
+# The Gradle wrapper is executed directly by Linux CI.
+android/project/gradlew text eol=lf
