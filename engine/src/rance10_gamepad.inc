@@ -2,6 +2,34 @@
 /* Included by input.c. Fixed-size input state, no worker, heap cache or OS warp. */
 #include "system4/ain.h"
 #define R10_PAD_MOUSE_ID (UINT32_MAX - 1u)
+
+// Android stores SDL's standard A..D-pad button numbers, followed by L2/R2.
+enum { R10_PAD_L2 = SDL_CONTROLLER_BUTTON_DPAD_RIGHT + 1, R10_PAD_R2, R10_PAD_BINDING_COUNT };
+static Uint8 r10_pad_binding[R10_PAD_BINDING_COUNT];
+static bool r10_pad_has_bindings;
+static bool r10_pad_trigger_held[2];
+
+static void r10_pad_configure_bindings(const char *mapping)
+{
+	r10_pad_has_bindings = false;
+	if (!mapping || !*mapping) return;
+	bool used[R10_PAD_BINDING_COUNT] = {0};
+	Uint8 bindings[R10_PAD_BINDING_COUNT];
+	for (int physical = 0; physical < R10_PAD_BINDING_COUNT; physical++) {
+		char *end;
+		long action = strtol(mapping, &end, 10);
+		if (end == mapping || action < 0 || action >= R10_PAD_BINDING_COUNT || used[action] ||
+				*end != (physical == R10_PAD_BINDING_COUNT - 1 ? '\0' : ',')) return;
+		used[action] = true;
+		bindings[physical] = (Uint8)action;
+		mapping = end + 1;
+	}
+	// The system Guide/Home button is reserved and often intercepted by Android.
+	if (bindings[SDL_CONTROLLER_BUTTON_GUIDE] != SDL_CONTROLLER_BUTTON_GUIDE) return;
+	memcpy(r10_pad_binding, bindings, sizeof(bindings));
+	r10_pad_has_bindings = true;
+}
+
 static struct {
 	SDL_JoystickID instance;
 	bool visible, initialized, keys[VK_NR_KEYCODES];
@@ -19,6 +47,47 @@ static struct {
 	int wheel_direction;
 	float x, y;
 } r10_pad = {.instance = -1};
+
+// Translate once before either input pump chooses native or mouse handling.
+// Return false for intermediate trigger samples that produce no button edge.
+static bool r10_pad_remap_event(SDL_Event *event)
+{
+	if (!r10_pad_has_bindings || !keyboard_focus) return true;
+	if (event->type == SDL_CONTROLLERBUTTONDOWN || event->type == SDL_CONTROLLERBUTTONUP) {
+		SDL_ControllerButtonEvent button = event->cbutton;
+		if (button.which != r10_pad.instance || button.button >= R10_PAD_L2) return true;
+		int action = r10_pad_binding[button.button];
+		if (action < R10_PAD_L2) {
+			event->cbutton.button = (Uint8)action;
+		} else {
+			event->caxis = (SDL_ControllerAxisEvent){
+				.type = SDL_CONTROLLERAXISMOTION, .timestamp = button.timestamp, .which = button.which,
+				.axis = SDL_CONTROLLER_AXIS_TRIGGERLEFT + action - R10_PAD_L2,
+				.value = button.state == SDL_PRESSED ? INT16_MAX : 0
+			};
+		}
+	} else if (event->type == SDL_CONTROLLERAXISMOTION) {
+		SDL_ControllerAxisEvent axis = event->caxis;
+		if (axis.which != r10_pad.instance || (axis.axis != SDL_CONTROLLER_AXIS_TRIGGERLEFT &&
+				axis.axis != SDL_CONTROLLER_AXIS_TRIGGERRIGHT)) return true;
+		int trigger = axis.axis - SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+		int action = r10_pad_binding[R10_PAD_L2 + trigger];
+		if (action >= R10_PAD_L2) {
+			event->caxis.axis = SDL_CONTROLLER_AXIS_TRIGGERLEFT + action - R10_PAD_L2;
+		} else {
+			bool held = r10_pad_trigger_held[trigger];
+			bool pressed = axis.value >= (held ? 10000 : 16000);
+			if (held == pressed) return false;
+			r10_pad_trigger_held[trigger] = pressed;
+			event->cbutton = (SDL_ControllerButtonEvent){
+				.type = pressed ? SDL_CONTROLLERBUTTONDOWN : SDL_CONTROLLERBUTTONUP,
+				.timestamp = axis.timestamp, .which = axis.which, .button = (Uint8)action,
+				.state = pressed ? SDL_PRESSED : SDL_RELEASED
+			};
+		}
+	}
+	return true;
+}
 
 bool input_gamepad_mouse_enabled(void)
 {
@@ -183,6 +252,7 @@ static void r10_pad_reset(void)
 	memset(r10_pad.keys, 0, sizeof(r10_pad.keys));
 	memset(r10_pad.buttons, 0, sizeof(r10_pad.buttons));
 	memset(r10_pad.axes, 0, sizeof(r10_pad.axes));
+	memset(r10_pad_trigger_held, 0, sizeof(r10_pad_trigger_held));
 	memset(r10_pad.min_release, 0, sizeof(r10_pad.min_release));
 	memset(r10_pad.key_repeat_at, 0, sizeof(r10_pad.key_repeat_at));
 	memset(r10_pad.button_route, 0, sizeof(r10_pad.button_route));
@@ -220,6 +290,7 @@ static void input_open_controller(int device)
 
 void input_open_controllers(void)
 {
+	if (input_gamepad_mouse_enabled()) r10_pad_configure_bindings(getenv("XSYSTEM4_RANCE10_PAD_BINDINGS"));
 	for (int i = 0; i < SDL_NumJoysticks(); i++) input_open_controller(i);
 }
 

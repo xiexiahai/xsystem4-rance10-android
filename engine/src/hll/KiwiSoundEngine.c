@@ -25,6 +25,7 @@
 #include "system4/ain.h"
 #include "system4/archive.h"
 #include "system4/ex.h"
+#include "system4/file.h"
 #include "system4/hashtable.h"
 #include "system4/string.h"
 
@@ -132,6 +133,7 @@ static int rance9_wav_prepare(int ch, int num)
 // which can own several simultaneous voices. Keep the legacy Music_/Sound_
 // interface above independent of these IDs.
 static bool named_interface;
+static bool replace_rance10_system_se;
 static struct id_pool sounds, effects;
 static struct ex *sound_info;
 // Cache only validated group numbers, never audio buffers or live channels.
@@ -140,6 +142,7 @@ static struct hash_table *sound_groups;
 static unsigned nr_sound_groups;
 static uint64_t sound_groups_generation;
 #define SOUND_GROUP_CACHE_LIMIT 1024
+#define RANCE10_SYSTEM_SE_ID 6
 
 static void clear_sound_groups(void)
 {
@@ -166,6 +169,8 @@ static void KiwiSoundEngine_ModuleInit(void)
 {
 	if (!named_interface)
 		return;
+	replace_rance10_system_se = config.ain_filename
+			&& !strcasecmp(path_basename(config.ain_filename), "Rance10.ain");
 	// AliceStart.ini has no mixer list in newer games. Their Kiwi interface
 	// uses numbered groups (master, music, SE, voice, and four extra groups).
 	if (!config.mixer_nr_channels) {
@@ -183,6 +188,8 @@ static void KiwiSoundEngine_ModuleInit(void)
 	id_pool_init(&sounds, 0);
 	id_pool_init(&effects, 0);
 	struct archive_data *data = asset_get_by_name(ASSET_SOUND, "timemap_sound2", NULL);
+	if (!data)
+		data = asset_get_by_name(ASSET_SOUND, "timemap_sound", NULL);
 	if (data) {
 		sound_info = ex_read(data->data, data->size);
 		archive_free_data(data);
@@ -311,16 +318,23 @@ static bool KiwiSoundEngine_PlaySe(int id, struct string *name)
 	if (id < 0)
 		return false;
 	struct se_slot *slot = id_pool_get(&effects, id);
+	bool replace = slot && !slot->multi_play && replace_rance10_system_se
+			&& id == RANCE10_SYSTEM_SE_ID;
 	Uint32 now = SDL_GetTicks();
 	if (slot) {
 		se_collect(slot, false);
 		if ((slot->has_played && now - slot->last_play < slot->play_span)
-			|| (!slot->multi_play && slot->voices))
+			|| (!replace && !slot->multi_play && slot->voices))
 			return false;
 	}
 	struct channel *ch = open_named_sound(name->text);
 	if (!ch)
 		return false;
+	// Rance10 shares this exclusive slot between attack, damage, and map
+	// effects. Once its configured interval elapses, the next effect takes
+	// over the slot so a long sample cannot suppress several later actions.
+	if (replace)
+		se_collect(slot, true);
 	if (!channel_play(ch)) {
 		channel_close(ch);
 		return false;

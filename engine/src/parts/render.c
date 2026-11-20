@@ -93,13 +93,51 @@ static bool parts_project_xy(struct parts *parts, mat4 matrix)
 	return true;
 }
 
+static bool parts_clipper_inverse(struct parts *clipper, mat4 inverse)
+{
+	struct parts_common *common = &clipper->states[clipper->state].common;
+	if (common->w <= 0 || common->h <= 0 ||
+			!clipper->global.scale.x || !clipper->global.scale.y)
+		return false;
+
+	mat4 transform = GLM_MAT4_IDENTITY_INIT;
+	glm_translate(transform, (vec3){clipper->global.pos.x, clipper->global.pos.y, 0});
+	glm_rotate_z(transform, glm_rad(clipper->local.rotation.z), transform);
+	glm_scale(transform, (vec3){clipper->global.scale.x, clipper->global.scale.y, 1});
+	glm_translate(transform, (vec3){common->origin_offset.x, common->origin_offset.y, 0});
+	glm_scale(transform, (vec3){common->w, common->h, 1});
+	if (!parts_project_xy(clipper, transform))
+		return false;
+	// Keep Z independent of the projected screen plane.
+	transform[2][0] = transform[2][1] = transform[0][2] = transform[1][2] = transform[3][2] = 0;
+	transform[2][2] = 1;
+	glm_mat4_inv(transform, inverse);
+	return true;
+}
+
+bool parts_clipper_contains(struct parts *parts, Point point)
+{
+	int number = parts->global.alpha_clipper_parts_no;
+	struct parts *clipper = number > 0 ? parts_render_lookup(parts, number) : NULL;
+	if (!clipper)
+		return true;
+	mat4 inverse;
+	if (!parts_clipper_inverse(clipper, inverse))
+		return false;
+	vec4 uv;
+	glm_mat4_mulv(inverse, (vec4){point.x, point.y, 0, 1}, uv);
+	// Use the rendered viewport boundary without sampling the GPU texture.
+	return uv[0] >= 0 && uv[0] < 1 && uv[1] >= 0 && uv[1] < 1;
+}
+
 static void parts_render_texture(struct parts *owner, struct texture *texture, mat4 mw_transform, Rectangle *rect, float blend_rate, vec3 add_color, vec3 multiply_color, int draw_filter, int alpha_clipper)
 {
 	mat4 projected;
 	glm_mat4_copy(mw_transform,projected);
 	if (!parts_project_xy(owner,projected)) return;
 	struct parts *clipper = alpha_clipper ? parts_render_lookup(owner, alpha_clipper) : NULL;
-	if (clipper && cosf(glm_rad(clipper->global.rotation.x))*cosf(glm_rad(clipper->global.rotation.y))<=0.000001f)
+	mat4 clip_inv;
+	if (clipper && !parts_clipper_inverse(clipper, clip_inv))
 		return;
 	mat4 wv_transform = WV_TRANSFORM(config.view_width, config.view_height);
 
@@ -122,20 +160,6 @@ static void parts_render_texture(struct parts *owner, struct texture *texture, m
 
 	if (clipper) {
 		struct parts_common *c_common = &clipper->states[clipper->state].common;
-
-		// Calculate the inverse of the clipper's world matrix.
-		mat4 clip_mw = GLM_MAT4_IDENTITY_INIT;
-		glm_translate(clip_mw, (vec3) { clipper->global.pos.x, clipper->global.pos.y, 0 });
-		glm_rotate_z(clip_mw, glm_rad(clipper->local.rotation.z), clip_mw);
-		glm_scale(clip_mw, (vec3){ clipper->global.scale.x, clipper->global.scale.y, 1.0 });
-		glm_translate(clip_mw, (vec3){ c_common->origin_offset.x, c_common->origin_offset.y, 0 });
-		glm_scale(clip_mw, (vec3){ c_common->w, c_common->h, 1.0 });
-		parts_project_xy(clipper,clip_mw);
-		// Invert only the projected screen plane, with an independent Z axis.
-		clip_mw[2][0]=clip_mw[2][1]=clip_mw[0][2]=clip_mw[1][2]=clip_mw[3][2]=0;
-		clip_mw[2][2]=1;
-		mat4 clip_inv;
-		glm_mat4_inv(clip_mw, clip_inv);
 
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, c_common->texture.handle);

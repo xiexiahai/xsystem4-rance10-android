@@ -36,6 +36,7 @@ class XSystem4Activity : SDLActivity() {
         if (BuildConfig.APPLICATION_ID.startsWith("io.github.xiexiahai.rance10.")) {
             SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_GAMEPAD", "1")
             SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_NATIVE_PAD", "1")
+            SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_PAD_BINDINGS", Rance10GamepadMapping.engineValue(this))
         }
         Rance10Diagnostics.apply(intent)
         if (intent.getBooleanExtra("NO_DIALOG_DIAGNOSTIC", false))

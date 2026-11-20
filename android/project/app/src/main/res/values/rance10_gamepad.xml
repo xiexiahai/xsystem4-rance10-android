@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rance10_gamepad_mapping">手柄映射</string>
+    <string name="rance10_pad_instructions">点选操作可更换实体按键，两键会互换。保存后退出并重开游戏生效。</string>
+    <string name="rance10_pad_reset">恢复默认</string>
+    <string name="rance10_pad_save">保存</string>
+    <string name="rance10_pad_saved">设置已保存，重开游戏后生效</string>
+    <string name="rance10_pad_save_failed">保存失败，请重试</string>
+    <string name="rance10_pad_binding">%1$s　·　%2$s</string>
+    <string-array name="rance10_pad_physical">
+        <item>A</item><item>B</item><item>X</item><item>Y</item><item>Select / Back</item><item>Home</item>
+        <item>Start</item><item>L3</item><item>R3</item><item>L1</item><item>R1</item>
+        <item>十字键上</item><item>十字键下</item><item>十字键左</item><item>十字键右</item><item>L2</item><item>R2</item>
+    </string-array>
+    <string-array name="rance10_pad_actions">
+        <item>确认 / 光标点击</item><item>返回 / 光标右键</item><item>X 功能 / 向上滚动</item><item>Y 功能 / 向下滚动</item>
+        <item>Select / Back 功能</item><item>Home</item><item>菜单</item><item>L3（默认未分配）</item><item>R3 功能</item>
+        <item>Ctrl 快进</item><item>光标精细移动</item><item>向上</item><item>向下</item><item>向左</item><item>向右</item>
+        <item>剧情回顾</item><item>场景回顾</item>
+    </string-array>
+</resources>

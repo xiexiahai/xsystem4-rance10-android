@@ -67,17 +67,22 @@ void parts_msg_bind_delegate(int parts_no,int delegate_index)
 			msg->delegate_index=delegate_index;
 }
 
-void parts_msg_release_parts(int parts_no)
+static void release_part_messages(int parts_no, int type)
 {
 	struct parts_message *msg=STAILQ_FIRST(&msg_queue),*next;
 	while (msg) {
 		next=STAILQ_NEXT(msg,entry);
-		if (msg->parts_no==parts_no) {
+		if (msg->parts_no==parts_no && (type<0 || msg->type==type)) {
 			STAILQ_REMOVE(&msg_queue,msg,parts_message,entry);
 			free(msg);
 		}
 		msg=next;
 	}
+}
+
+void parts_msg_release_parts(int parts_no)
+{
+	release_part_messages(parts_no, -1);
 }
 
 void parts_msg_push(struct parts* parts, int type, const char *fmt, ...)
@@ -113,6 +118,11 @@ void parts_msg_push(struct parts* parts, int type, const char *fmt, ...)
 	}
 	va_end(ap);
 
+	// A scroll listener can write its reported position back to the control.
+	// Keep only its latest pending position so obsolete positions cannot echo
+	// back and forth during the script's message drain.
+	if (parts && type == PARTS_MSG_SCROLL)
+		release_part_messages(parts->no, PARTS_MSG_SCROLL);
 	STAILQ_INSERT_TAIL(&msg_queue, msg, entry);
 }
 

@@ -873,11 +873,17 @@ static enum savefile_error load_rsave_image(const char *key, const char *path)
 	return SAVEFILE_SUCCESS;
 }
 
-bool vm_load_image(const char *key, const char *path)
+bool vm_load_image_with_stage(const char *key, const char *path, const char **failure_stage)
 {
+    if (failure_stage)
+        *failure_stage = NULL;
     if(ain->version>=11) {
         bool ok=r12_load_image(key,path);
-        if(!ok)WARNING("R10VM1: load rejected; current VM retained");
+        if (!ok) {
+            if (failure_stage)
+                *failure_stage = r12_stage;
+            WARNING("R10VM1: load rejected; current VM retained");
+        }
         return ok;
     }
 	// First, try to read as a rsave.
@@ -893,6 +899,11 @@ bool vm_load_image(const char *key, const char *path)
 		VM_ERROR("Failed to read VM image '%s': %s", display_sjis0(path), savefile_strerror(error));
 	}
     return false;
+}
+
+bool vm_load_image(const char *key, const char *path)
+{
+	return vm_load_image_with_stage(key, path, NULL);
 }
 
 static struct page *load_json_image_comments(const char *key, const char *path, int *success)

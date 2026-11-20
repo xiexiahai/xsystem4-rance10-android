@@ -794,6 +794,7 @@ void handle_window_events(void)
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
 		if (r10_pad_window_event(&e)) continue;
+		if (!r10_pad_remap_event(&e)) continue;
 		r10_pad_pointer_event(&e);
 		if (input_gamepad_mouse_enabled()) {
 			if (e.type == SDL_CONTROLLERBUTTONUP) {r10_pad_button_event(&e.cbutton);continue;}
@@ -1133,6 +1134,7 @@ void handle_events(void)
 	SDL_Event e;
 	while (SDL_PollEvent(&e)) {
 		if (r10_pad_window_event(&e)) continue;
+		if (!r10_pad_remap_event(&e)) continue;
 		r10_pad_pointer_event(&e);
 		switch (e.type) {
 		case SDL_QUIT:

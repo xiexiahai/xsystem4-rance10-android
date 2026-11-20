@@ -66,6 +66,7 @@ struct channel {
 	// stream data
 	atomic_int voice;
 	sts_mixer_stream_t stream;
+	bool end_pending;
 	bool paused;
 	sts_mixer_voice_t paused_voice;
 	float data[CHUNK_SIZE * 2];
@@ -209,6 +210,13 @@ static float cb_calc_fade(struct fade *fade)
 static int refill_stream(sts_mixer_sample_t *sample, void *data)
 {
 	struct channel *ch = data;
+	sample->length = CHUNK_SIZE * 2;
+	if (ch->end_pending) {
+		ch->end_pending = false;
+		ch->voice = -1;
+		return STS_STREAM_COMPLETE;
+	}
+
 	uint_least32_t frames_read;
 	memset(ch->data, 0, sizeof(float) * sample->length);
 
@@ -253,6 +261,13 @@ static int refill_stream(sts_mixer_sample_t *sample, void *data)
 	}
 
 	if (r == STS_STREAM_COMPLETE) {
+		// The mixer discards the buffer when the callback reports completion.
+		// Let it consume the final decoded frames before releasing the voice.
+		if (frames_read) {
+			sample->length = frames_read * 2;
+			ch->end_pending = true;
+			return STS_STREAM_CONTINUE;
+		}
 		ch->voice = -1;
 	}
 
@@ -278,6 +293,8 @@ int channel_play(struct channel *ch)
 		return 1;
 	}
 	memset(ch->data, 0, sizeof(ch->data));
+	ch->stream.sample.length = CHUNK_SIZE * 2;
+	ch->end_pending = false;
 	ch->voice = sts_mixer_play_stream(&mixers[ch->mixer_no].mixer, &ch->stream, 1.0f);
 	ch->paused = false;
 	SDL_UnlockAudioDevice(audio_device);
@@ -437,6 +454,8 @@ int channel_seek(struct channel *ch, int pos)
 	// NOTE: SACT2.Music_Seek doesn't seem to do anything in Sengoku Rance...
 	SDL_LockAudioDevice(audio_device);
 	int r = cb_seek(ch, muldiv(pos, ch->info.samplerate, 1000));
+	if (r)
+		ch->end_pending = false;
 	SDL_UnlockAudioDevice(audio_device);
 	return r;
 }

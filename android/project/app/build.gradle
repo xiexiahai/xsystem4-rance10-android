@@ -5,6 +5,9 @@ def modGame = project.hasProperty('RANCE03_MOD')
 def rance03Adapter = project.hasProperty('RANCE03_ADAPTER')
 def rance10Cheats = project.hasProperty('RANCE10_CHEATS')
 def rance10Development = project.hasProperty('RANCE10_DEVELOPMENT')
+def rance10Package = rance10Development ? (rance10Cheats ? 'io.github.xiexiahai.rance10.development.cheats' : 'io.github.xiexiahai.rance10.development') :
+    (rance10Cheats ? 'io.github.xiexiahai.rance10.cheats' : 'io.github.xiexiahai.rance10.prototype')
+def saveTransferEnabled = !rance10Development && !rance03Adapter && !modGame
 if (rance10Cheats && (modGame || rance03Adapter))
     throw new GradleException('RANCE10_CHEATS must not combine with the Rance03 variants')
 if (rance03Adapter && bundledGame) throw new GradleException('RANCE03_ADAPTER is resource-free; do not combine it with BUNDLED_GAME')
@@ -34,28 +37,31 @@ android {
     buildFeatures { buildConfig true }
     defaultConfig {
         if (buildAsApplication) {
-            applicationId rance10Development ? (rance10Cheats ? 'io.github.xiexiahai.rance10.development.cheats' : 'io.github.xiexiahai.rance10.development') :
-                (rance10Cheats ? 'io.github.xiexiahai.rance10.cheats' : 'io.github.xiexiahai.rance10.prototype')
+            applicationId rance10Package
         }
         // A bundled build carries the game inside the APK: the external-resource
         // launcher would look for a files/game directory that does not exist.
         manifestPlaceholders = [externalLauncherEnabled: !bundledGame, bundledLauncherEnabled: bundledGame,
+                                saveTransferEnabled: saveTransferEnabled,
                                 applicationLabel: rance10Development ? (rance10Cheats ? '兰斯10 dev cheat' : '兰斯10 dev') : (rance10Cheats ? '兰斯10 cheat' : '兰斯10'),
                                 licenseParent: bundledGame ? '.BundledLauncherActivity' : '.Rance10LauncherActivity']
         minSdkVersion 21
+        resValue 'bool', 'rance10_save_shortcut_enabled', saveTransferEnabled.toString()
         targetSdkVersion 34
         // So that stripReleaseDebugSymbols task works
         ndkPath System.getenv("ANDROID_NDK_HOME")
-        versionCode 145
-        versionName rance10Cheats ? "1.0.5-cheat" : "1.0.5"
+        versionCode 151
+        versionName rance10Cheats ? "1.0.6-cheat" : "1.0.6"
         buildConfigField 'boolean', 'RANCE10_CHEATS', rance10Cheats.toString()
         buildConfigField 'boolean', 'RANCE10_DEVELOPMENT', rance10Development.toString()
+        buildConfigField 'boolean', 'RANCE10_SAVE_TRANSFER_ENABLED', saveTransferEnabled.toString()
         if (rance10Development) {
             versionCode Integer.parseInt(project.findProperty('DEVELOPMENT_VERSION_CODE') ?: '1')
             versionName rance10Cheats ? '1.0.5-dev-cheats' : '1.0.5-dev'
         }
     }
     sourceSets.main.java.srcDir(rance10Cheats ? 'src/rance10cheats/java' : modGame ? 'src/mod/java' : 'src/normal/java')
+    sourceSets.main.res.srcDir(rance10Cheats ? 'src/rance10cheats/res' : 'src/normal/res')
     if (rance10Cheats) {
         def cheatJni = rootProject.file('../cheats-jni')
         for (library in ['libxsystem4.so', 'libSDL2.so', 'libcglm.so']) {

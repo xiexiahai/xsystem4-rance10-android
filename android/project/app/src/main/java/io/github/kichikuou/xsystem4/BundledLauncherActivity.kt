@@ -88,6 +88,7 @@ class BundledLauncherActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        registerRance10Shortcuts()
         val padding = (24 * resources.displayMetrics.density).toInt()
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
@@ -161,12 +162,17 @@ class BundledLauncherActivity : Activity() {
     }
 
     private fun launchGame(dir: File, apkArchives: Array<String>) {
+        if (SaveTransferActivity.busy) {
+            android.widget.Toast.makeText(this, "请等存档迁移完成后再启动游戏。", android.widget.Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
         // Same save-profile selection as the standard launcher: the cheat build
         // uses cheat-saves/main, the normal build uses saves/main. The bundled
         // launcher used to hard-code SaveData, which made existing saves look
         // lost after an upgrade.
-        val preferences = getSharedPreferences("rance10-launch", MODE_PRIVATE)
-        val profileKey = if (BuildConfig.RANCE10_CHEATS) "active_cheat_save_profile" else "active_save_profile"
+        val preferences = getSharedPreferences(SaveProfile.PREFERENCES, MODE_PRIVATE)
+        val profileKey = SaveProfile.activeKey(BuildConfig.RANCE10_CHEATS)
         val exists = SaveProfile.DirectoryExists { File(filesDir, it).isDirectory }
         val relative = if (BuildConfig.RANCE10_CHEATS)
             SaveProfile.selectCheat(preferences.getString(profileKey, null), null, exists)

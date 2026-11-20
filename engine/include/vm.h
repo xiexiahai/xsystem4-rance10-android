@@ -194,6 +194,7 @@ uint32_t get_strswitch_address(int no, struct string *str);
 int vm_save_image(const char *key, const char *path);
 void vm_probe_resume_image(void);
 bool vm_load_image(const char *key, const char *path);
+bool vm_load_image_with_stage(const char *key, const char *path, const char **failure_stage);
 struct page *vm_load_image_comments(const char *key, const char *path, int *success);
 int vm_write_image_comments(const char *key, const char *path, struct page *comments);
 

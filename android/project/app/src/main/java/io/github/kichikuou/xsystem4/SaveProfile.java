@@ -2,13 +2,22 @@ package io.github.kichikuou.xsystem4;
 
 /** Select a relative app-private save profile without copying or merging files. */
 final class SaveProfile {
+    static final String PREFERENCES = "rance10-launch";
     static final String MAIN = "saves/main";
     static final String CHEAT_MAIN = "cheat-saves/main";
     interface DirectoryExists { boolean test(String relative); }
 
+    static String activeKey(boolean cheats) {
+        return cheats ? "active_cheat_save_profile" : "active_save_profile";
+    }
+
+    static String imported(boolean cheats, String id) {
+        return (cheats ? "cheat-saves" : "saves") + "/imported-" + id;
+    }
+
     static boolean supported(String value) {
         return MAIN.equals(value) || (value != null &&
-                value.matches("resume-probe-saves/v[1-9][0-9]{0,2}"));
+                value.matches("resume-probe-saves/v[1-9][0-9]{0,2}|saves/imported-[a-f0-9]{32}"));
     }
 
     static String select(String previous, String requested, DirectoryExists exists) {
@@ -18,7 +27,7 @@ final class SaveProfile {
 
     static boolean supportedCheat(String value) {
         return CHEAT_MAIN.equals(value) || (value != null &&
-                value.matches("cheat-probe-saves/v[1-9][0-9]{0,2}"));
+                value.matches("cheat-probe-saves/v[1-9][0-9]{0,2}|cheat-saves/imported-[a-f0-9]{32}"));
     }
 
     static String selectCheat(String previous, String requested, DirectoryExists exists) {

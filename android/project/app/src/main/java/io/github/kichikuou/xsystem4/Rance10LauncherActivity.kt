@@ -18,6 +18,7 @@ class Rance10LauncherActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        registerRance10Shortcuts()
         if (savedInstanceState?.getBoolean("launched_game", false) == true) {
             finish()
             return
@@ -79,7 +80,12 @@ class Rance10LauncherActivity : Activity() {
 
     private fun launchProbe(game: File, textureRoundtrip: Boolean = false, resumeProfile: Boolean = false, resumeRoundtrip: Boolean = false, textboxProbe: Boolean = false, perfTrace: Boolean = false) {
         if (launchedGame) return
-        val preferences = getSharedPreferences("rance10-launch", MODE_PRIVATE)
+        if (SaveTransferActivity.busy) {
+            Toast.makeText(this, "请等存档迁移完成后再启动游戏。", Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+        val preferences = getSharedPreferences(SaveProfile.PREFERENCES, MODE_PRIVATE)
         val developmentSaves = if (BuildConfig.RANCE10_DEVELOPMENT) {
             try {
                 val explicit = intent.hasExtra(DevelopmentSaveProfile.EXTRA)
@@ -97,7 +103,7 @@ class Rance10LauncherActivity : Activity() {
                 return
             }
         } else null
-        val profileKey = if (BuildConfig.RANCE10_CHEATS) "active_cheat_save_profile" else "active_save_profile"
+        val profileKey = SaveProfile.activeKey(BuildConfig.RANCE10_CHEATS)
         val exists = SaveProfile.DirectoryExists { File(filesDir, it).isDirectory }
         val relative = if (BuildConfig.RANCE10_DEVELOPMENT) {
             "dev-saves/main"

@@ -601,6 +601,7 @@ struct string *parts_text_get(struct parts_text *t);
 
 // render.c
 void parts_render_init(void);
+bool parts_clipper_contains(struct parts *parts, Point point);
 void parts_render_update(void);
 void parts_engine_dirty(void);
 void parts_engine_clean(void);

@@ -155,7 +155,7 @@ void PE_SetFocus(int no)
 	}
 }
 
-static bool parts_hittest(struct parts *parts, int state, Point pos)
+static bool parts_hittest_unclipped(struct parts *parts, int state, Point pos)
 {
 	if (parts->parked_textures) return false;
 	bool hit;
@@ -191,6 +191,14 @@ static bool parts_hittest(struct parts *parts, int state, Point pos)
 		hitbox.y += origin.y;
 	}
 	return SDL_PointInRect(&pos, &hitbox);
+}
+
+static bool parts_hittest(struct parts *parts, int state, Point pos)
+{
+	if (!parts_hittest_unclipped(parts, state, pos))
+		return false;
+	return !ain || ain->version < 11 || parts->global.alpha_clipper_parts_no <= 0 ||
+		parts_clipper_contains(parts, pos);
 }
 
 static void drag_state_reset(void)

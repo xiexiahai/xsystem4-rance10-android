@@ -521,6 +521,16 @@ static bool ain12_hll_call(int libno, int fno, int type_param)
 	} else if (!strcmp(name, "PushBack") && n == 2 && width == 1) {
 		union vm_value value = stack_pop();
 		stack_pop();
+		if (type_param == AIN_STRUCT && p->element_type->data == AIN_STRUCT && value.i >= 0 &&
+				call_stack_ptr > 0 && !strcmp(ain->functions[call_stack[call_stack_ptr - 1].fno].name,
+					"BattleLogCollection@Flush")) {
+			/* Flush appends the current line and clears it for reuse. Preserve
+			 * the historical row here. Other original callers, including the
+			 * startup scene, keep identity for objects that own native parts. */
+			int source = value.i;
+			value.i = heap_alloc_page(copy_page_value(heap_get_page(source)));
+			heap_unref(source);
+		}
 		ain12_resize(slot, count+1, false);
 		p = heap_get_page(slot);
 		switch (p->element_type->data) {

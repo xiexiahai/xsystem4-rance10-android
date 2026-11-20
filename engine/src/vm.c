@@ -680,6 +680,60 @@ static const SDL_MessageBoxButtonData stop_continue_buttons[] = {
 	{ 0, 0, "Continue" },
 };
 
+static const SDL_MessageBoxButtonData retry_error_buttons[] = {
+	{ 0, 1, "退出游戏" },
+	{ SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT | SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "继续" },
+};
+
+static const char *retry_failure_stage;
+static size_t retry_error_ip;
+
+static bool in_battle_retry(void)
+{
+	bool snapshot_load = false;
+	for (int i = call_stack_ptr - 1; i >= 0; i--) {
+		const char *name = ain->functions[call_stack[i].fno].name;
+		if (!strcmp(name, "SnapShotSaveManager::Load"))
+			snapshot_load = true;
+		if (!strcmp(name, "SceneCommonMenu@LoadSnapShot") || !strcmp(name, "SceneGameOver@OnFinish"))
+			return snapshot_load;
+	}
+	return false;
+}
+
+static void remember_battle_retry_failure(const char *stage)
+{
+	if (!stage || !in_battle_retry())
+		return;
+	// The game's load routine pushes the message immediately before system.Error.
+	uint16_t opcode = get_opcode(instr_ptr);
+	if (opcode != CALLSYS && opcode != CALLHLL)
+		return;
+	size_t next = instr_ptr + instruction_width(opcode);
+	size_t error = next + instruction_width(S_PUSH);
+	if (error + 2 <= ain->code_size && get_opcode(next) == S_PUSH) {
+		retry_error_ip = error;
+		retry_failure_stage = stage;
+	}
+}
+
+static const char *battle_retry_failure_reason(const char *stage)
+{
+	if (!strcmp(stage, "read-open"))
+		return "无法打开战前快照文件。";
+	if (!strcmp(stage, "read-size"))
+		return "无法确认快照大小，或快照大小超出支持范围。";
+	if (!strcmp(stage, "read-content"))
+		return "无法完整读取快照内容。";
+	if (!strcmp(stage, "read-buffer") || !strcmp(stage, "allocate-candidate"))
+		return "加载战前快照时未能分配所需内存。";
+	if (!strcmp(stage, "read-json") || !strcmp(stage, "decode-format"))
+		return "无法解析战前快照的文件格式。";
+	if (!strcmp(stage, "decode-program") || !strcmp(stage, "decode-key"))
+		return "战前快照与当前游戏程序或存档标识不匹配。";
+	return "快照中的游戏状态未通过恢复检查。";
+}
+
 static struct string *get_func_stack_name(int index)
 {
 	int i = call_stack_ptr - (1 + index);
@@ -777,11 +831,16 @@ static void system_call(enum syscall_code code)
 	case SYS_RESUME_LOAD: {
 		int filename_slot = stack_pop().i;
 		int key_slot = stack_pop().i;
-		if(vm_load_image(heap_get_string(key_slot)->text, heap_get_string(filename_slot)->text)) {
-            stack_push(0); // Continue at the saved ResumeSave expression.
-        } else {
-            heap_unref(filename_slot);heap_unref(key_slot); // ResumeLoad is void on failure.
-        }
+		const char *failure_stage;
+		retry_failure_stage = NULL;
+		if (vm_load_image_with_stage(heap_get_string(key_slot)->text,
+		                             heap_get_string(filename_slot)->text, &failure_stage)) {
+			stack_push(0); // Continue at the saved ResumeSave expression.
+		} else {
+			heap_unref(filename_slot);
+			heap_unref(key_slot); // ResumeLoad is void on failure.
+			remember_battle_retry_failure(failure_stage);
+		}
 		break;
 	}
 	case SYS_EXISTS_FILE: { // system.ExistsFile(string szFileName)
@@ -832,7 +891,18 @@ static void system_call(enum syscall_code code)
 		int result = 0;
 		struct string *str = stack_peek_string(0);
 		char *utf = sjis2utf(str->text, str->size);
-		sys_warning("*GAME ERROR*: %s\n", utf);
+		char retry_message[512];
+		const char *stage = retry_error_ip == instr_ptr ? retry_failure_stage : NULL;
+		retry_failure_stage = NULL;
+		bool is_retry_error = stage && !strcmp(utf, "加载失败了");
+		if (is_retry_error) {
+			snprintf(retry_message, sizeof(retry_message),
+			         "无法载入这场战斗的战前快照。\n%s\n诊断代码 R10-RETRY/%s\n\n"
+			         "可以尝试从「加载」打开最近可用的存档。请保留报错截图和当时的日志。",
+			         battle_retry_failure_reason(stage), stage);
+		}
+		const char *message = is_retry_error ? retry_message : utf;
+		sys_warning("*GAME ERROR*: %s\n", message);
 		if (getenv("XSYSTEM4_NO_DIALOG")) {
 			free(utf);
 			VM_ERROR("Game reported a script error");
@@ -840,10 +910,10 @@ static void system_call(enum syscall_code code)
 		const SDL_MessageBoxData mbox = {
 			SDL_MESSAGEBOX_ERROR,
 			NULL,
-			"Game Error - xsystem4",
-			utf,
-			SDL_arraysize(stop_continue_buttons),
-			stop_continue_buttons,
+			is_retry_error ? "重新战斗失败" : "Game Error - xsystem4",
+			message,
+			is_retry_error ? SDL_arraysize(retry_error_buttons) : SDL_arraysize(stop_continue_buttons),
+			is_retry_error ? retry_error_buttons : stop_continue_buttons,
 			NULL
 		};
 		if (SDL_ShowMessageBox(&mbox, &result)) {
@@ -2780,6 +2850,7 @@ int vm_execute_ain(struct ain *program)
 {
 	ain = program;
 	setjmp(reset_buf);
+	retry_failure_stage = NULL;
 	savedata_program_id_begin(program);
 	r03mod_init();
 	r10mod_init();

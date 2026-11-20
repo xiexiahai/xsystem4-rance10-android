@@ -53,10 +53,11 @@ See [docs/compatibility.md](docs/compatibility.md) for the status table.
 
 ## Status
 
-Playable for both titles. Current Rance 10 Android version: **1.0.5 (versionCode
-145, 2026-11-17)**. See [1.0.5 release notes](docs/release-1.0.5.md).
+Both titles are playable. [Rance 10 Android 1.0.6 (versionCode 151)](docs/release-1.0.6.md)
+adds launcher shortcuts for save migration and controller remapping, fixes repeated
+battle log entries and party formation input, and improves audio and retry diagnostics.
 
-Changed in 1.0.5:
+### [1.0.5](docs/release-1.0.5.md)
 
 * Fix simple-battle defeat/retry resume, overlapping settings controls, and
   click-through during rapidly opened/closed party-formation transitions.
