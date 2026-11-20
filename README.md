@@ -8,7 +8,7 @@ reimplementation of AliceSoft's System 4 / AIN engine.
 
 普通版和 cheat 版同步更新。新增桌面长按「存档迁移」与「手柄映射」，
 修复战斗 LOG 重复、部队编制误选或卡住、部分音效漏播的问题，
-并为重新战斗读档失败增加了诊断编号。[查看 1.0.6 更新说明](docs/release-1.0.6.md)
+并为重新战斗读档失败增加了诊断编号。[查看 1.0.6 更新说明](docs/release-1.0.6.md) | [GitHub Release v1.0.6](https://github.com/xiexiahai/xsystem4-rance10-android/releases/tag/v1.0.6)
 
 Upstream's compatibility table lists **"All games released after Rance 01" as
 Unsupported**. This fork's main work is engine support for two of those titles:
