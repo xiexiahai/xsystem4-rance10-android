@@ -79,6 +79,7 @@ private object BundledPreparation {
 }
 
 class BundledLauncherActivity : Activity() {
+    private val launchScope = MainScope()
     private lateinit var status: TextView
     private lateinit var progress: ProgressBar
     private lateinit var action: Button
@@ -130,6 +131,11 @@ class BundledLauncherActivity : Activity() {
         super.onPause()
     }
 
+    override fun onDestroy() {
+        launchScope.cancel()
+        super.onDestroy()
+    }
+
     private fun render(state: BundledState) {
         action.isEnabled = state is BundledState.Ready || state is BundledState.Failed
         progress.isIndeterminate = state is BundledState.Idle || state is BundledState.Working && state.total == 0L
@@ -162,6 +168,33 @@ class BundledLauncherActivity : Activity() {
     }
 
     private fun launchGame(dir: File, apkArchives: Array<String>) {
+        val sunset = BuildConfig.RANCE10_LAUNCH_OPTIONS && intent.getBooleanExtra(SunsetInstall.EXTRA,
+            getSharedPreferences(SaveProfile.PREFERENCES, MODE_PRIVATE)
+                .getBoolean(SunsetInstall.DEFAULT_SUNSET, false))
+        if (sunset) {
+            launchScope.launch {
+                val prepared = try {
+                    withContext(Dispatchers.IO) { SunsetInstall(noBackupFilesDir).prepareGame(dir, apkArchives) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("BundledGame", "日不落启动目录准备失败", e)
+                    showUi()
+                    status.text = "无法准备日不落。请检查「启动项」中的安装状态。"
+                    progress.isIndeterminate = false
+                    action.visibility = android.view.View.VISIBLE
+                    action.text = "返回"
+                    action.setOnClickListener { finish() }
+                    return@launch
+                }
+                startGame(prepared.first, prepared.second, sunset = true)
+            }
+        } else {
+            startGame(dir, apkArchives, sunset = false)
+        }
+    }
+
+    private fun startGame(dir: File, apkArchives: Array<String>, sunset: Boolean) {
         if (SaveTransferActivity.busy) {
             android.widget.Toast.makeText(this, "请等存档迁移完成后再启动游戏。", android.widget.Toast.LENGTH_SHORT).show()
             finish()
@@ -172,19 +205,19 @@ class BundledLauncherActivity : Activity() {
         // launcher used to hard-code SaveData, which made existing saves look
         // lost after an upgrade.
         val preferences = getSharedPreferences(SaveProfile.PREFERENCES, MODE_PRIVATE)
-        val profileKey = SaveProfile.activeKey(BuildConfig.RANCE10_CHEATS)
+        val cheats = Rance10PlayMode.useCheats(preferences)
+        val profileKey = SaveProfile.activeKey(cheats, sunset)
         val exists = SaveProfile.DirectoryExists { File(filesDir, it).isDirectory }
-        val relative = if (BuildConfig.RANCE10_CHEATS)
-            SaveProfile.selectCheat(preferences.getString(profileKey, null), null, exists)
-        else
-            SaveProfile.select(preferences.getString(profileKey, null), null, exists)
+        val relative = SaveProfile.selectForGame(preferences.getString(profileKey, null),
+            cheats, sunset, exists)
         val save = File(filesDir, relative)
         try {
             if (!save.isDirectory && !save.mkdirs())
                 throw java.io.IOException("Cannot create selected save directory")
             // Explicit probe profiles retain their identity, even when empty.
             // A failed copy must not publish a partially imported main profile.
-            if (relative == SaveProfile.MAIN || relative == SaveProfile.CHEAT_MAIN)
+            if (relative == SaveProfile.CHEAT_MAIN ||
+                (relative == SaveProfile.MAIN && !Rance10PlayMode.selectable))
                 LegacySaveImport.copyIfEmpty(File(filesDir, "SaveData"), save)
         } catch (e: Exception) {
             Log.e("BundledGame", "Save preparation failed", e)
@@ -195,15 +228,17 @@ class BundledLauncherActivity : Activity() {
             action.visibility = android.view.View.VISIBLE
             action.isEnabled = true
             action.text = "重试"
-            action.setOnClickListener { launched = true; launchGame(dir, apkArchives) }
+            action.setOnClickListener { launched = true; startGame(dir, apkArchives, sunset) }
             return
         }
-        preferences.edit().putString(profileKey, relative).apply()
+        if (!sunset) preferences.edit().putString(profileKey, relative).apply()
         startActivity(Intent(this, XSystem4Activity::class.java).apply {
             Rance10Diagnostics.forward(this@BundledLauncherActivity, intent, this)
             putExtra(XSystem4Activity.EXTRA_GAME_ROOT, dir.path)
             putExtra(XSystem4Activity.EXTRA_SAVE_DIR, save.path)
             putExtra(XSystem4Activity.EXTRA_APK_ARCHIVES, apkArchives)
+            putExtra(SunsetInstall.EXTRA, sunset)
+            putExtra(Rance10PlayMode.EXTRA_CHEAT, cheats)
             // Same save format as the standard launcher: without this flag the
             // engine falls back to classic GSAVE, and R10GS1 saves written by a
             // previous build are rejected at load time (auto-save -> title).

@@ -5,4 +5,6 @@ object Rance10CheatBridge {
     external fun nativeSetFlags(flags: Int)
     external fun nativeGetFlags(): Int
     external fun nativeGetCapabilities(): Int
+    external fun nativeFoodRerollReady(): Boolean
+    external fun nativeRequestFoodReroll(): Boolean
 }

@@ -2,6 +2,25 @@
  * outside this format. The caller retains atomic file replacement. */
 static union vm_value ain12_gsave_value(struct gsave *save,const struct ain_type *type,int value,int depth);
 
+static int gsave_member_index(const struct gsave *save, struct ain_struct *st,
+        const struct gsave_field_def *saved, int position)
+{
+    int member = struct_member_index(st, saved->name);
+    if (member >= 0 || save->version != 8 || position >= st->nr_members)
+        return member;
+
+    // Windows uses the AIN's original serialization names and omits some
+    // runtime reference/delegate names.
+    const struct ain_variable *candidate = &st->members[position];
+    if (!saved->name[0]) {
+        switch (candidate->type.data) {
+        case AIN_REF_TYPE: case AIN_ARRAY: case AIN_DELEGATE: return position;
+        default: return -1;
+        }
+    }
+    return candidate->name2 && !strcmp(candidate->name2, saved->name) ? position : -1;
+}
+
 static struct gsave_flat_array *ain12_gsave_array(struct gsave *save,int slot,
         struct gsave_array *array,struct gsave_flat_array *flat,int depth)
 {
@@ -29,6 +48,10 @@ static union vm_value ain12_gsave_value(struct gsave *save,const struct ain_type
     case AIN_ENUM: case AIN_ENUM2: return vm_int(value);
     case AIN_DELEGATE:
         return variable_initval(AIN_DELEGATE);
+    case AIN_REF_STRUCT:
+        if (save->version != 8) return vm_int(-1);
+        /* Windows saves encode struct references as records in the same table. */
+        /* fall through */
     case AIN_STRUCT: {
         if(value==-1) return vm_int(-1);
         if(value<0 || value>=save->nr_records || type->struc<0 || type->struc>=ain->nr_structures)
@@ -42,10 +65,14 @@ static union vm_value ain12_gsave_value(struct gsave *save,const struct ain_type
             VM_ERROR("Typed save structure mismatch");
         int slot=alloc_struct(type->struc);struct page *p=heap_get_page(slot);
         for(int i=0;i<rec->nr_indices;i++) {
-            int member=struct_member_index(st,definition->fields[i].name);
-            if(member<0) VM_ERROR("Unknown typed save structure member");
+            const struct gsave_field_def *saved = &definition->fields[i];
+            int member = gsave_member_index(save, st, saved, i);
+            if (member < 0)
+                VM_ERROR("Unknown typed save member %s.%s", display_sjis0(st->name), display_sjis1(saved->name));
             const struct ain_type *field=&st->members[member].type;
-            if(field->data!=definition->fields[i].type) VM_ERROR("Typed save member type mismatch");
+            if(field->data!=saved->type)
+                VM_ERROR("Typed save member %s.%s type mismatch: %d != %d",
+                    display_sjis0(st->name), display_sjis1(st->members[member].name), field->data, saved->type);
             int index=rec->indices[i];
             if(index<0 || index>=save->nr_keyvals) VM_ERROR("Invalid typed save member index");
             union vm_value loaded=ain12_gsave_value(save,field,save->keyvals[index].value,depth+1);
@@ -54,6 +81,8 @@ static union vm_value ain12_gsave_value(struct gsave *save,const struct ain_type
         return vm_int(slot);
     }
     case AIN_ARRAY: {
+        if (save->version == 8 && value == -1)
+            return variable_init(type);
         if(value<0 || value>=save->nr_arrays || !type->array_type)
             VM_ERROR("Invalid typed save array index or descriptor");
         struct gsave_array *array=&save->arrays[value];

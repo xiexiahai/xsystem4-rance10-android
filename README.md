@@ -4,6 +4,14 @@ An Android (ARM64) fork derived from
 [kichikuou/xsystem4](https://github.com/kichikuou/xsystem4), the open-source
 reimplementation of AliceSoft's System 4 / AIN engine.
 
+## 兰斯10：决战 1.0.7（163）
+
+一个应用内可选择普通或 cheat 模式，再选择原版或日不落。长按图标进入「启动项」，
+可以设置默认组合、一键安装日不落 0.49、迁移存档和调整手柄映射。
+整合包覆盖安装旧 cheat 版，沿用原档案。独立普通版的存档可通过 ZIP 迁移。
+
+[查看 1.0.7 更新说明](docs/release-1.0.7.md) · [GitHub Release v1.0.7](https://github.com/xiexiahai/xsystem4-rance10-android/releases/tag/v1.0.7)
+
 ## 兰斯10 安卓版 1.0.6（151）
 
 普通版和 cheat 版同步更新。新增桌面长按「存档迁移」与「手柄映射」，
@@ -53,7 +61,7 @@ mainex12 snapshots, and others.
 
 **Title-specific adapters**
 * `rance03_mod.c` — Rance 03 gameplay hooks (compile-time flag)
-* `rance10_cheats.c` — optional cheat module for Rance 10 (separate package)
+* `rance10_cheats.c` — optional cheat module for Rance 10, enabled by the launcher’s cheat mode
 
 See [docs/compatibility.md](docs/compatibility.md) for the status table.
 
@@ -103,6 +111,8 @@ Known issues:
 * On long sessions some devices still get progressively slower battle
   pre-loading, and may eventually crash/ANR. Save and resource paths have been
   optimised, but the root cause is not fully confirmed.
+* Repeated battle retries can occasionally fail to load the pre-battle snapshot.
+  Reports with the `R10-RETRY/…` code and battle name help locate the failure.
 * Map route display may occasionally be missing after loading a save; not
   reproduced reliably.
 * A texture-parking benchmark mode is off by default (`XSYSTEM4_PARK_SOURCE=1`
@@ -121,9 +131,8 @@ Bundled mode is content-addressed and incremental: `.afa` archives are mapped
 directly out of the APK (fd slice) instead of being copied, the remaining files
 are extracted into `<app>/no_backup/bundled-game/<content-id>` with per-file
 SHA-256 verification and resumable `.part` files. Saves live in
-`<app>/files/saves/main` (normal) and `<app>/files/cheat-saves/main` (cheat
-variant); an older `SaveData` directory is only read through the migration
-path.
+`<app>/files/saves/main` (normal mode) and `<app>/files/cheat-saves/main` (cheat
+mode). Both modes use their own `sunset-049` profile for the Sunset MOD.
 
 ## Building
 
@@ -166,6 +175,11 @@ cd android/project
 ```
 
 Bundled assets are read from `$BUNDLED_ASSETS` (default `work/standalone-assets`).
+
+For bundled Rance 10 builds with the Sunset MOD installer, run
+`python tools/build_sunset_archive.py --work-dir <build-dir>` with Python 3.12
+or newer and set `SUNSET_ARCHIVE_NATIVE_DIR` to the generated JNI directory
+before running Gradle.
 
 ## Layout
 

@@ -383,6 +383,10 @@ static void render_flat_emitter(struct parts *parts, struct parts_flat *f,
 		glm_vec3_copy(eff.add_color, ud.add_color);
 		glm_vec3_copy(eff.mul_color, ud.mul_color);
 		glm_mat4_mul(base, layer_m, ud.transform);
+		// Mode 0 uses the FLAT origin. Clear the emitter's local translation
+		// before applying the owning part's position, scale and rotation.
+		if (em->pos_track_mode == 0)
+			glm_vec3_zero(ud.transform[3]);
 		glm_mat4_mul(root, ud.transform, ud.transform);
 		parts_flat_foreach_emitter_particle_keys(f, emitter_lib_idx, birth_key,prev,next,
 				birth_frame, age, frame_count,

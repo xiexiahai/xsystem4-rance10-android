@@ -8,6 +8,9 @@ def rance10Development = project.hasProperty('RANCE10_DEVELOPMENT')
 def rance10Package = rance10Development ? (rance10Cheats ? 'io.github.xiexiahai.rance10.development.cheats' : 'io.github.xiexiahai.rance10.development') :
     (rance10Cheats ? 'io.github.xiexiahai.rance10.cheats' : 'io.github.xiexiahai.rance10.prototype')
 def saveTransferEnabled = !rance10Development && !rance03Adapter && !modGame
+def launchOptionsEnabled = bundledGame && saveTransferEnabled
+def gameLabel = rance10Development ? (rance10Cheats ? '兰斯10 dev cheat' : '兰斯10 dev') :
+    (rance10Cheats ? (launchOptionsEnabled ? '兰斯10：决战' : '兰斯10 cheat') : '兰斯10')
 if (rance10Cheats && (modGame || rance03Adapter))
     throw new GradleException('RANCE10_CHEATS must not combine with the Rance03 variants')
 if (rance03Adapter && bundledGame) throw new GradleException('RANCE03_ADAPTER is resource-free; do not combine it with BUNDLED_GAME')
@@ -43,18 +46,19 @@ android {
         // launcher would look for a files/game directory that does not exist.
         manifestPlaceholders = [externalLauncherEnabled: !bundledGame, bundledLauncherEnabled: bundledGame,
                                 saveTransferEnabled: saveTransferEnabled,
-                                applicationLabel: rance10Development ? (rance10Cheats ? '兰斯10 dev cheat' : '兰斯10 dev') : (rance10Cheats ? '兰斯10 cheat' : '兰斯10'),
+                                applicationLabel: gameLabel,
                                 licenseParent: bundledGame ? '.BundledLauncherActivity' : '.Rance10LauncherActivity']
         minSdkVersion 21
-        resValue 'bool', 'rance10_save_shortcut_enabled', saveTransferEnabled.toString()
+        resValue 'bool', 'rance10_launch_shortcut_enabled', saveTransferEnabled.toString()
         targetSdkVersion 34
         // So that stripReleaseDebugSymbols task works
         ndkPath System.getenv("ANDROID_NDK_HOME")
-        versionCode 151
-        versionName rance10Cheats ? "1.0.6-cheat" : "1.0.6"
+        versionCode 163
+        versionName rance10Cheats ? "1.0.7-cheat" : "1.0.7"
         buildConfigField 'boolean', 'RANCE10_CHEATS', rance10Cheats.toString()
         buildConfigField 'boolean', 'RANCE10_DEVELOPMENT', rance10Development.toString()
         buildConfigField 'boolean', 'RANCE10_SAVE_TRANSFER_ENABLED', saveTransferEnabled.toString()
+        buildConfigField 'boolean', 'RANCE10_LAUNCH_OPTIONS', launchOptionsEnabled.toString()
         if (rance10Development) {
             versionCode Integer.parseInt(project.findProperty('DEVELOPMENT_VERSION_CODE') ?: '1')
             versionName rance10Cheats ? '1.0.5-dev-cheats' : '1.0.5-dev'
@@ -83,6 +87,15 @@ android {
                 throw new GradleException("Missing development native library: ${library}")
         }
         sourceSets.main.jniLibs.setSrcDirs([nativeDirectory])
+    }
+    if (launchOptionsEnabled) {
+        def sunsetNative = file(System.getenv('SUNSET_ARCHIVE_NATIVE_DIR') ?: '../sunset-archive-jni')
+        if (!new File(sunsetNative, 'arm64-v8a/libsunsetarchive.so').isFile())
+            throw new GradleException('Run tools/build_sunset_archive.py and set SUNSET_ARCHIVE_NATIVE_DIR')
+        sourceSets.main.jniLibs.srcDir(sunsetNative)
+        sourceSets.main.resources.srcDir(new File(sunsetNative.parentFile, 'licenses'))
+        sourceSets.debug.manifest.srcFile('src/sunset/AndroidManifest.xml')
+        sourceSets.release.manifest.srcFile('src/sunset/AndroidManifest.xml')
     }
     if (bundledGame) {
         androidResources {

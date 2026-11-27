@@ -15,15 +15,27 @@
  */
 
 #include <stdint.h>
+#include <limits.h>
+#include <string.h>
 
 #include "system4.h"
+#include "system4/ain.h"
 #include "system4/file.h"
 #include "system4/hashtable.h"
 #include "system4/string.h"
 
 #include "hll.h"
+#include "savedata.h"
+#include "xsystem4.h"
 
 static struct string *save_path = NULL;
+static const char total_play_time_file[] = "Asra_TotalPlayTime.asd";
+
+static bool is_profile_play_time(const struct string *name)
+{
+	return ain && ain->version == 12 && config.save_dir &&
+		!strcmp(name->text, "Asra_TotalPlayTime");
+}
 
 union csd_datum {
 	void *p;
@@ -75,6 +87,14 @@ static bool CommonSystemData_LoadAtStartup(void)
 
 static bool CommonSystemData_SetDataInt(struct string *name, int value)
 {
+	if (is_profile_play_time(name)) {
+		if (value < 0)
+			return false;
+		cJSON *minutes = cJSON_CreateNumber(value);
+		bool ok = minutes && save_json(total_play_time_file, minutes);
+		cJSON_Delete(minutes);
+		return ok;
+	}
 	csd_put_datum(name, (union csd_datum) { .i = value });
 	return true;
 }
@@ -103,6 +123,15 @@ static bool CommonSystemData_SetDataBool(struct string *name, bool value)
 
 static bool CommonSystemData_GetDataInt(struct string *name, int *value)
 {
+	if (is_profile_play_time(name)) {
+		cJSON *minutes = load_json(total_play_time_file);
+		bool ok = cJSON_IsNumber(minutes) && minutes->valuedouble >= 0 &&
+			minutes->valuedouble <= INT_MAX && minutes->valuedouble == minutes->valueint;
+		if (ok)
+			*value = minutes->valueint;
+		cJSON_Delete(minutes);
+		return ok;
+	}
 	union csd_datum datum;
 	if (csd_get_datum(name, &datum)) {
 		*value = datum.i;

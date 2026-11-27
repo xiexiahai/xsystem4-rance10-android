@@ -11,8 +11,31 @@ final class SaveProfile {
         return cheats ? "active_cheat_save_profile" : "active_save_profile";
     }
 
+    static String activeKey(boolean cheats, boolean sunset) {
+        return sunset ? activeKey(cheats) + "_sunset_049" : activeKey(cheats);
+    }
+
+    static String sunset(boolean cheats) {
+        return cheats ? "cheat-saves/sunset-049" : "saves/sunset-049";
+    }
+
     static String imported(boolean cheats, String id) {
         return (cheats ? "cheat-saves" : "saves") + "/imported-" + id;
+    }
+
+    static String imported(boolean cheats, boolean sunset, String id) {
+        return sunset ? sunset(cheats) + "-imported-" + id : imported(cheats, id);
+    }
+
+    static boolean supportedForGame(String value, boolean cheats, boolean sunset) {
+        if (!sunset) return cheats ? supportedCheat(value) : supported(value);
+        String base = sunset(cheats);
+        return base.equals(value) || (value != null && value.matches(base + "-imported-[a-f0-9]{32}"));
+    }
+
+    static String selectForGame(String previous, boolean cheats, boolean sunset, DirectoryExists exists) {
+        if (!sunset) return cheats ? selectCheat(previous, null, exists) : select(previous, null, exists);
+        return supportedForGame(previous, cheats, true) && exists.test(previous) ? previous : sunset(cheats);
     }
 
     static boolean supported(String value) {

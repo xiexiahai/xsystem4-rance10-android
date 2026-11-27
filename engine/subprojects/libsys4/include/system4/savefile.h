@@ -134,6 +134,7 @@ struct gsave_field_def {
 struct gsave *gsave_create(int version, const char *key, int nr_ain_globals, const char *group);
 void gsave_free(struct gsave *gs);
 struct gsave *gsave_read(const char *path, enum savefile_error *error);
+struct string *gsave_read_v8_comment(const char *path, const char *key);
 enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs);
 enum savefile_error gsave_write(struct gsave *gs, FILE *out, bool encrypt, int compression_level);
 

@@ -69,8 +69,18 @@ out:g12_perf_phase(&perf,G12_PERF_CLEANUP);
 }
 bool read_group_save_comment(const char *key,const char *filename,struct string **comment)
 {
-    if(!comment)return false;uint8_t *raw=NULL;size_t size=0;cJSON *payload=NULL;struct string *next=NULL;bool ok=false;
-    if(!g12_read_envelope(filename,&raw,&size) || !(payload=g12_parse_json(raw,size)) || !g12_comment_base(payload,key))goto out;
+    if (!comment) return false;
+    uint8_t *raw=NULL;size_t size=0;cJSON *payload=NULL;struct string *next=NULL;bool ok=false;
+    if (!g12_read_envelope(filename, &raw, &size)) {
+        char *path = savedir_path(filename);
+        struct string *legacy = gsave_read_v8_comment(path, key);
+        free(path);
+        if (!legacy) return false;
+        if (*comment) free_string(*comment);
+        *comment = legacy;
+        return true;
+    }
+    if(!(payload=g12_parse_json(raw,size)) || !g12_comment_base(payload,key))goto out;
     free(raw);raw=NULL;
     const cJSON *hex=cJSON_GetObjectItemCaseSensitive(payload,"comment");
     if(!cJSON_IsString(hex) || !hex->valuestring || strlen(hex->valuestring)>131072 || !(next=g12_unhex(hex)))goto out;

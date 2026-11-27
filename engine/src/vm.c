@@ -23,6 +23,7 @@
 #include <setjmp.h>
 #include <assert.h>
 #include <SDL.h> // for system.MsgBox
+#include <zlib.h>
 
 #include "system4.h"
 #include "system4/ain.h"
@@ -187,6 +188,67 @@ void global_set(int varno, union vm_value val, bool call_dtors)
 static int32_t struct_page_slot(void)
 {
 	return call_stack[call_stack_ptr-1].struct_page;
+}
+
+static int sunset_max_star_function = -1;
+static int sunset_character_structure = -1;
+static int sunset_phase_view_function = -1;
+static int sunset_run_flat_function = -1;
+static int sunset_flat_resolver_function = -1;
+static int sunset_flat_title_search_function = -1;
+
+static bool skip_sunset_empty_flat_search(int function)
+{
+	if (function != sunset_flat_title_search_function || sunset_flat_resolver_function < 0 ||
+	    call_stack_ptr == 0 || call_stack[call_stack_ptr - 1].fno != sunset_flat_resolver_function ||
+	    stack_ptr < 1)
+		return false;
+
+	int name = stack[stack_ptr - 1].i;
+	if (!string_index_valid(name) || heap_get_string(name)->size)
+		return false;
+
+	// Empty means that this part has no FLAT, including the optional card reward effect.
+	// Searching the catalog for an empty substring picks an unrelated animation.
+	stack[stack_ptr - 1].i = 0;
+	heap_unref(name);
+	return true;
+}
+
+static bool skip_sunset_empty_phase_flat(int function)
+{
+	if (function != sunset_run_flat_function || sunset_phase_view_function < 0 ||
+	    call_stack_ptr == 0 || call_stack[call_stack_ptr - 1].fno != sunset_phase_view_function ||
+	    stack_ptr < 3 || stack[stack_ptr - 2].i != INT_MIN || stack[stack_ptr - 1].i != 0)
+		return false;
+
+	int name = stack[stack_ptr - 3].i;
+	if (!string_index_valid(name) || heap_get_string(name)->size)
+		return false;
+
+	// 日不落 returns an empty filename when the phase has no animation.
+	// The filename resolver would otherwise search for "" and play a different FLAT.
+	stack_ptr -= 3;
+	heap_unref(name);
+	return true;
+}
+
+static int32_t opcode_struct_page_slot(void)
+{
+	int32_t slot = struct_page_slot();
+	if (slot >= 0 || sunset_max_star_function < 0 || call_stack_ptr < 2 ||
+	    call_stack[call_stack_ptr - 1].fno != sunset_max_star_function)
+		return slot;
+
+	// 日不落 0.49 calls Character::GetMaxStar with CALLFUNC. Its body
+	// uses PUSHSTRUCTPAGE to read the Character from the calling method.
+	int32_t caller = call_stack[call_stack_ptr - 2].struct_page;
+	if (!page_index_valid(caller))
+		return slot;
+	struct page *receiver = heap_get_page(caller);
+	if (receiver->type == STRUCT_PAGE && receiver->index == sunset_character_structure)
+		return caller;
+	return slot;
 }
 
 static struct page *struct_page(void)
@@ -628,6 +690,18 @@ void vm_call(int fno, int struct_page)
 	vm_execute();
 	instr_ptr = saved_ip;
 }
+
+#ifdef XSYSTEM4_RANCE10_CHEATS
+void r10mod_call_method(int fno, int struct_page, union vm_value argument)
+{
+	size_t saved_ip = instr_ptr;
+	stack_push(struct_page);
+	stack_push(argument);
+	method_call(fno, VM_RETURN);
+	vm_execute();
+	instr_ptr = saved_ip;
+}
+#endif
 
 #ifdef XSYSTEM4_RANCE03_MOD
 void r03mod_call_setter(int fno, int object, int value)
@@ -1081,6 +1155,7 @@ static void echo_message(int i)
 #include "ain12_string_replace.inc"
 #include "ain12_string_regex.inc"
 #include "ain12_vm.inc"
+#include "vm_sunset_phrase.inc"
 
 static enum opcode execute_instruction(enum opcode opcode)
 {
@@ -1171,7 +1246,7 @@ static enum opcode execute_instruction(enum opcode opcode)
 		break;
 	}
 	case PUSHSTRUCTPAGE: {
-		stack_push(struct_page_slot());
+		stack_push(opcode_struct_page_slot());
 		break;
 	}
 	case X_ICAST: {
@@ -1355,7 +1430,13 @@ static enum opcode execute_instruction(enum opcode opcode)
 	// --- Control Flow ---
 	//
 	case CALLFUNC: {
-		function_call(get_argument(0), instr_ptr + instruction_width(CALLFUNC));
+		int fno = get_argument(0);
+		if (skip_sunset_empty_phase_flat(fno) || skip_sunset_empty_flat_search(fno)) {
+			instr_ptr += instruction_width(CALLFUNC);
+			break;
+		}
+		r10mod_before_call(fno);
+		function_call(fno, instr_ptr + instruction_width(CALLFUNC));
 		break;
 	}
 	case CALLFUNC2: {
@@ -1371,6 +1452,8 @@ static enum opcode execute_instruction(enum opcode opcode)
 				VM_ERROR("CALLMETHOD argument underflow: %d", n);
 			int at = stack_ptr - n - 1;
 			fno = stack[at].i;
+			if (sunset_phrase_before_title_join(fno))
+				break;
 			memmove(stack + at, stack + at + 1, n * sizeof(*stack));
 			stack_ptr--;
 			if (fno < 0 || fno >= ain->nr_functions || ain->functions[fno].nr_args != n)
@@ -2849,6 +2932,16 @@ _Noreturn void vm_reset(void)
 int vm_execute_ain(struct ain *program)
 {
 	ain = program;
+	const char *sunset = getenv("XSYSTEM4_RANCE10_SUNSET");
+	const bool use_sunset = sunset && !strcmp(sunset, "1") && ain->version == 12;
+	sunset_max_star_function = use_sunset ? ain_get_function(ain, "Character::GetMaxStar") : -1;
+	sunset_character_structure = use_sunset ? ain_get_struct(ain, "Character") : -1;
+	sunset_phase_view_function = use_sunset ? ain_get_function(ain, "ScenePhaseView@Run") : -1;
+	sunset_run_flat_function = use_sunset ? ain_get_function(ain, "Scenes::RunFlat") : -1;
+	sunset_flat_resolver_function = use_sunset ? ain_get_function(ain, "Parts@ResolveFlatName") : -1;
+	sunset_flat_title_search_function = use_sunset ? ain_get_function(ain, "AFL_AFA_Flat_SearchTitle") : -1;
+	if (use_sunset)
+		sunset_phrase_init();
 	setjmp(reset_buf);
 	retry_failure_stage = NULL;
 	savedata_program_id_begin(program);

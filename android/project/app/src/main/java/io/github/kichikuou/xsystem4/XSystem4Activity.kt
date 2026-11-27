@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Process
 import android.util.Log
 import android.view.KeyEvent
+import java.io.File
 import org.libsdl.app.SDLActivity
 
 // Intent for this activity must have the following extras:
@@ -18,6 +19,9 @@ class XSystem4Activity : SDLActivity() {
         const val COMMAND_OPEN_PLAYING_MANUAL = 0x8000  // xsystem4/src/hll/SystemService.c
     }
 
+    internal val cheatsEnabled: Boolean
+        get() = BuildConfig.RANCE10_CHEATS && intent.getBooleanExtra(Rance10PlayMode.EXTRA_CHEAT, true)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Workaround for https://github.com/libsdl-org/SDL/issues/8995
@@ -30,6 +34,12 @@ class XSystem4Activity : SDLActivity() {
     }
 
     override fun getArguments(): Array<String> {
+        SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_CHEATS", if (cheatsEnabled) "1" else "0")
+        val sunset = intent.getBooleanExtra(SunsetInstall.EXTRA, false)
+        SDLActivity.nativeSetenv("XSYSTEM4_RANCE10_SUNSET", if (sunset) "1" else "0")
+        val phrase = File(noBackupFilesDir, SunsetInstall.PENDING_PHRASE)
+        SDLActivity.nativeSetenv("XSYSTEM4_SUNSET_PHRASE_FILE",
+            if (sunset && phrase.isFile) phrase.path else "")
         // Offline build: online features stay disabled. Interactive game
         // confirmations remain enabled unless an explicit headless probe opts out.
         SDLActivity.nativeSetenv("XSYSTEM4_TEST_REJECT_NETWORK", "1")

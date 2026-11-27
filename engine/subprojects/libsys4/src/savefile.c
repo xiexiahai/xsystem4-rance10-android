@@ -31,6 +31,7 @@
 #include "system4/zlib.h"
 
 #define GD11_ENCRYPT_KEY 0x12320f
+#define SAVEFILE_SIZE_LIMIT (256u * 1024u * 1024u)
 
 static struct rsave_heap_null rsave_null_singleton = { RSAVE_NULL };
 struct rsave_heap_null * const rsave_null = &rsave_null_singleton;
@@ -80,7 +81,9 @@ struct savefile *savefile_read(const char *path, enum savefile_error *error)
 	fseek(fp, 0, SEEK_END);
 	long compressed_size = ftell(fp) - sizeof(header);
 	fseek(fp, sizeof(header), SEEK_SET);
-	if (compressed_size < 2) {
+	unsigned long raw_size = LittleEndian_getDW(header, 4);
+	if (compressed_size < 2 || (unsigned long)compressed_size > SAVEFILE_SIZE_LIMIT ||
+	    raw_size == 0 || raw_size > SAVEFILE_SIZE_LIMIT) {
 		*error = SAVEFILE_INVALID;
 		goto err;
 	}
@@ -103,7 +106,6 @@ struct savefile *savefile_read(const char *path, enum savefile_error *error)
 	default:   save->compression_level = ZLIB_DEFAULT_COMPRESSION; break;
 	}
 
-	unsigned long raw_size = LittleEndian_getDW(header, 4);
 	save->buf = xmalloc(raw_size);
 	if (!zlib_decompress_exact(save->buf, raw_size, buf, compressed_size)) {
 		*error = SAVEFILE_INVALID;
@@ -185,7 +187,7 @@ void gsave_free(struct gsave *gs)
 	if (gs->arrays) {
 		for (int32_t i = 0; i < gs->nr_arrays; i++) {
 			free(gs->arrays[i].dimensions);
-			for (int32_t j = 0; j < gs->arrays[i].nr_flat_arrays; j++) {
+			for (int32_t j = 0; gs->arrays[i].flat_arrays && j < gs->arrays[i].nr_flat_arrays; j++) {
 				free(gs->arrays[i].flat_arrays[j].values);
 			}
 			free(gs->arrays[i].flat_arrays);
@@ -202,7 +204,7 @@ void gsave_free(struct gsave *gs)
 		for (int32_t i = 0; i < gs->nr_struct_defs; i++) {
 			struct gsave_struct_def *sd = &gs->struct_defs[i];
 			free(sd->name);
-			for (int32_t j = 0; j < sd->nr_fields; j++) {
+			for (int32_t j = 0; sd->fields && j < sd->nr_fields; j++) {
 				free(sd->fields[j].name);
 			}
 			free(sd->fields);
@@ -241,17 +243,78 @@ static bool gsave_validate_value(int32_t val, enum ain_data_type type, struct gs
 	case AIN_ENUM:
 	case AIN_ENUM2:
 	case AIN_REF_TYPE:
-		return true;
+		return gs->version != 8 || type != AIN_REF_STRUCT ||
+			val == -1 || (0 <= val && val < gs->nr_records);
 	case AIN_STRING:
 		return (0 <= val && val < gs->nr_strings) || val == GSAVE7_EMPTY_STRING;
 	case AIN_STRUCT:
 		return val == -1 || (0 <= val && val < gs->nr_records);
 	case AIN_ARRAY:
 	case AIN_ARRAY_TYPE:
-		return 0 <= val && val < gs->nr_arrays;
+		return (gs->version == 8 && val == -1) || (0 <= val && val < gs->nr_arrays);
 	default:
 		return false;
 	}
+}
+
+static const char *gsave_read_cstring(struct buffer *r)
+{
+	const char *start = (const char *)r->buf + r->index;
+	const char *end = memchr(start, 0, buffer_remaining(r));
+	if (!end)
+		return NULL;
+	r->index += end - start + 1;
+	return start;
+}
+
+static bool gsave_fits(const struct buffer *r, int32_t count, size_t width)
+{
+	return count >= 0 && (size_t)count <= (r->size - r->index) / width;
+}
+
+/* Windows GSAVE v8 inserts the end of the tables and a comment flag after
+ * the key/value header. The optional suffix is one length-prefixed string. */
+static bool gsave_v8_header(struct buffer *r, size_t *tables_end, size_t *comment_size)
+{
+	if (!gsave_fits(r, 2, 4))
+		return false;
+	int32_t end = buffer_read_int32(r);
+	int32_t has_comment = buffer_read_int32(r);
+	if (end < 0 || (size_t)end < r->index || (size_t)end > r->size)
+		return false;
+	*tables_end = end;
+	*comment_size = 0;
+	if (has_comment == 0)
+		return *tables_end == r->size;
+	if (has_comment != 1 || r->size - *tables_end < 4)
+		return false;
+	size_t length = LittleEndian_getDW(r->buf, *tables_end);
+	if (length != r->size - *tables_end - 4 || length > 65536 ||
+	    memchr(r->buf + *tables_end + 4, 0, length))
+		return false;
+	*comment_size = length;
+	return true;
+}
+
+struct string *gsave_read_v8_comment(const char *path, const char *key)
+{
+	enum savefile_error error;
+	struct savefile *save = savefile_read(path, &error);
+	if (!save)
+		return NULL;
+	struct buffer r;
+	buffer_init(&r, save->buf, save->len);
+	const char *stored_key = gsave_read_cstring(&r);
+	struct string *result = NULL;
+	if (stored_key && !strcmp(key, stored_key) && gsave_fits(&r, 16, 4) &&
+	    LittleEndian_getDW(r.buf, r.index + 4) == 8) {
+		r.index += 14 * 4;
+		size_t tables_end, size;
+		if (gsave_v8_header(&r, &tables_end, &size) && size)
+			result = make_string((const char *)r.buf + tables_end + 4, size);
+	}
+	savefile_free(save);
+	return result;
 }
 
 enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
@@ -259,10 +322,13 @@ enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
 	struct buffer r;
 	buffer_init(&r, buf, len);
 
-	gs->key = strdup(buffer_skip_string(&r));
+	const char *key = gsave_read_cstring(&r);
+	if (!key || !gsave_fits(&r, 14, 4))
+		return SAVEFILE_INVALID;
+	gs->key = strdup(key);
 	gs->uk1 = buffer_read_int32(&r);
 	gs->version = buffer_read_int32(&r);
-	if (gs->version != 4 && gs->version != 5 && gs->version != 7)
+	if (gs->version != 4 && gs->version != 5 && gs->version != 7 && gs->version != 8)
 		return SAVEFILE_UNSUPPORTED_FORMAT;
 	gs->uk2 = buffer_read_int32(&r);
 	gs->nr_ain_globals = buffer_read_int32(&r);
@@ -278,23 +344,44 @@ enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
 	size_t keyvals_offset = buffer_read_int32(&r);
 	gs->nr_keyvals = buffer_read_int32(&r);
 
+	size_t tables_end = len, comment_size;
+	if (gs->version == 8 && !gsave_v8_header(&r, &tables_end, &comment_size))
+		return SAVEFILE_INVALID;
+	if (r.index > records_offset || records_offset > globals_offset ||
+	    globals_offset > strings_offset || strings_offset > arrays_offset ||
+	    arrays_offset > keyvals_offset || keyvals_offset > tables_end)
+		return SAVEFILE_INVALID;
+	r.size = records_offset;
 	if (gs->version >= 5) {
-		gs->group = strdup(buffer_skip_string(&r));
+		const char *group = gsave_read_cstring(&r);
+		if (!group)
+			return SAVEFILE_INVALID;
+		gs->group = strdup(group);
 	}
 
 	// records
 	if (r.index != records_offset)
 		return SAVEFILE_INVALID;
+	r.size = globals_offset;
+	if (!gsave_fits(&r, gs->nr_records, 8))
+		return SAVEFILE_INVALID;
 	gs->records = xcalloc(gs->nr_records, sizeof(struct gsave_record));
 	for (struct gsave_record *rec = gs->records; rec < gs->records + gs->nr_records; rec++) {
+		if (!gsave_fits(&r, 2, 4))
+			return SAVEFILE_INVALID;
 		if (gs->version <= 5) {
 			rec->type = buffer_read_int32(&r);
-			rec->struct_name = strdup(buffer_skip_string(&r));
+			const char *name = gsave_read_cstring(&r);
+			if (!name || !gsave_fits(&r, 1, 4))
+				return SAVEFILE_INVALID;
+			rec->struct_name = strdup(name);
 		} else {
 			rec->struct_index = buffer_read_int32(&r);
 			rec->type = rec->struct_index == -1 ? GSAVE_RECORD_GLOBALS : GSAVE_RECORD_STRUCT;
 		}
 		rec->nr_indices = buffer_read_int32(&r);
+		if (!gsave_fits(&r, rec->nr_indices, 4))
+			return SAVEFILE_INVALID;
 		rec->indices = xcalloc(rec->nr_indices, sizeof(int32_t));
 		int index_ubound;
 		switch (rec->type) {
@@ -318,13 +405,24 @@ enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
 	// globals
 	if (r.index != globals_offset)
 		return SAVEFILE_INVALID;
+	r.size = strings_offset;
+	if (!gsave_fits(&r, gs->nr_globals, gs->version <= 5 ? 13 : 9))
+		return SAVEFILE_INVALID;
 	gs->globals = xcalloc(gs->nr_globals, sizeof(struct gsave_global));
 	for (struct gsave_global *g = gs->globals; g < gs->globals + gs->nr_globals; g++) {
+		if (!gsave_fits(&r, 2, 4))
+			return SAVEFILE_INVALID;
 		g->type = buffer_read_int32(&r);
 		g->value = buffer_read_int32(&r);
-		g->name = strdup(buffer_skip_string(&r));
-		if (gs->version <= 5)
+		const char *name = gsave_read_cstring(&r);
+		if (!name)
+			return SAVEFILE_INVALID;
+		g->name = strdup(name);
+		if (gs->version <= 5) {
+			if (!gsave_fits(&r, 1, 4))
+				return SAVEFILE_INVALID;
 			g->unknown = buffer_read_int32(&r);
+		}
 		if (!gsave_validate_value(g->value, g->type, gs))
 			return SAVEFILE_INVALID;
 	}
@@ -332,37 +430,62 @@ enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
 	// strings
 	if (r.index != strings_offset)
 		return SAVEFILE_INVALID;
+	r.size = arrays_offset;
+	if (!gsave_fits(&r, gs->nr_strings, 1))
+		return SAVEFILE_INVALID;
 	gs->strings = xcalloc(gs->nr_strings, sizeof(struct string *));
 	for (int i = 0; i < gs->nr_strings; i++) {
-		gs->strings[i] = buffer_read_string(&r);
+		const char *start = (const char *)r.buf + r.index;
+		if (!gsave_read_cstring(&r))
+			return SAVEFILE_INVALID;
+		gs->strings[i] = make_string(start, r.index - (start - (const char *)r.buf) - 1);
 	}
 
 	// arrays
 	if (r.index != arrays_offset)
 		return SAVEFILE_INVALID;
+	r.size = keyvals_offset;
+	if (!gsave_fits(&r, gs->nr_arrays, 8))
+		return SAVEFILE_INVALID;
 	gs->arrays = xcalloc(gs->nr_arrays, sizeof(struct gsave_array));
 	for (struct gsave_array *a = gs->arrays; a < gs->arrays + gs->nr_arrays; a++) {
+		if (!gsave_fits(&r, 2, 4))
+			return SAVEFILE_INVALID;
 		a->rank = buffer_read_int32(&r);
+		if (a->rank < -1 || (a->rank > 0 && !gsave_fits(&r, a->rank, 4)))
+			return SAVEFILE_INVALID;
 		int expected_nr_flat_arrays = 0;
 		if (a->rank > 0) {
 			expected_nr_flat_arrays = 1;
 			a->dimensions = xcalloc(a->rank, sizeof(int32_t));
 			for (int i = 0; i < a->rank; i++) {
 				a->dimensions[i] = buffer_read_int32(&r);
-				if (i != 0)
+				if (a->dimensions[i] < 0)
+					return SAVEFILE_INVALID;
+				if (i != 0) {
+					if (a->dimensions[i] && expected_nr_flat_arrays > INT32_MAX / a->dimensions[i])
+						return SAVEFILE_INVALID;
 					expected_nr_flat_arrays *= a->dimensions[i];
+				}
 			}
 		}
+		if (!gsave_fits(&r, 1, 4))
+			return SAVEFILE_INVALID;
 		a->nr_flat_arrays = buffer_read_int32(&r);
-		if (a->nr_flat_arrays != expected_nr_flat_arrays)
+		if (a->nr_flat_arrays != expected_nr_flat_arrays ||
+		    !gsave_fits(&r, a->nr_flat_arrays, gs->version >= 7 ? 8 : 4))
 			return SAVEFILE_INVALID;
 		a->flat_arrays = xcalloc(a->nr_flat_arrays, sizeof(struct gsave_flat_array));
 		for (struct gsave_flat_array *fa = a->flat_arrays; fa < a->flat_arrays + a->nr_flat_arrays; fa++) {
+			if (!gsave_fits(&r, 1, gs->version >= 7 ? 8 : 4))
+				return SAVEFILE_INVALID;
 			fa->nr_values = buffer_read_int32(&r);
 			if (fa->nr_values != a->dimensions[0])
 				return SAVEFILE_INVALID;
 			if (gs->version >= 7)
 				fa->type = buffer_read_int32(&r);
+			if (!gsave_fits(&r, fa->nr_values, gs->version >= 7 ? 4 : 8))
+				return SAVEFILE_INVALID;
 			fa->values = xcalloc(fa->nr_values, sizeof(struct gsave_array_value));
 			for (int i = 0; i < fa->nr_values; i++) {
 				int32_t value = buffer_read_int32(&r);
@@ -378,34 +501,60 @@ enum savefile_error gsave_parse(uint8_t *buf, size_t len, struct gsave *gs)
 	// key-values
 	if (r.index != keyvals_offset)
 		return SAVEFILE_INVALID;
+	r.size = tables_end;
+	if (!gsave_fits(&r, gs->nr_keyvals, gs->version <= 5 ? 9 : 4))
+		return SAVEFILE_INVALID;
 	gs->keyvals = xcalloc(gs->nr_keyvals, sizeof(struct gsave_keyval));
 	for (struct gsave_keyval *kv = gs->keyvals; kv < gs->keyvals + gs->nr_keyvals; kv++) {
 		if (gs->version <= 5) {
+			if (!gsave_fits(&r, 2, 4))
+				return SAVEFILE_INVALID;
 			kv->type = buffer_read_int32(&r);
 			kv->value = buffer_read_int32(&r);
-			kv->name = strdup(buffer_skip_string(&r));
+			const char *name = gsave_read_cstring(&r);
+			if (!name)
+				return SAVEFILE_INVALID;
+			kv->name = strdup(name);
 			if (!gsave_validate_value(kv->value, kv->type, gs))
 				return SAVEFILE_INVALID;
 		} else {
+			if (!gsave_fits(&r, 1, 4))
+				return SAVEFILE_INVALID;
 			kv->value = buffer_read_int32(&r);
 		}
 	}
 
 	// struct-defs
 	if (gs->version >= 7) {
+		if (!gsave_fits(&r, 1, 4))
+			return SAVEFILE_INVALID;
 		gs->nr_struct_defs = buffer_read_int32(&r);
+		if (!gsave_fits(&r, gs->nr_struct_defs, 5))
+			return SAVEFILE_INVALID;
 		gs->struct_defs = xcalloc(gs->nr_struct_defs, sizeof(struct gsave_struct_def));
 		for (struct gsave_struct_def *sd = gs->struct_defs; sd < gs->struct_defs + gs->nr_struct_defs; sd++) {
-			sd->name = strdup(buffer_skip_string(&r));
+			const char *name = gsave_read_cstring(&r);
+			if (!name || !gsave_fits(&r, 1, 4))
+				return SAVEFILE_INVALID;
+			sd->name = strdup(name);
 			sd->nr_fields = buffer_read_int32(&r);
+			if (!gsave_fits(&r, sd->nr_fields, 5))
+				return SAVEFILE_INVALID;
 			sd->fields = xcalloc(sd->nr_fields, sizeof(struct gsave_field_def));
 			for (struct gsave_field_def *fd = sd->fields; fd < sd->fields + sd->nr_fields; fd++) {
+				if (!gsave_fits(&r, 1, 4))
+					return SAVEFILE_INVALID;
 				fd->type = buffer_read_int32(&r);
-				fd->name = strdup(buffer_skip_string(&r));
+				const char *field = gsave_read_cstring(&r);
+				if (!field)
+					return SAVEFILE_INVALID;
+				fd->name = strdup(field);
 			}
 		}
 	}
 
+	if (gs->version == 8 && r.index != tables_end)
+		return SAVEFILE_INVALID;
 	return SAVEFILE_SUCCESS;
 }
 

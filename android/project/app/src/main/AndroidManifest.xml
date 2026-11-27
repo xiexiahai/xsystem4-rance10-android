@@ -95,17 +95,31 @@
 
         <activity android:name=".SaveTransferActivity"
             android:enabled="${saveTransferEnabled}"
-            android:exported="true"
+            android:exported="false"
             android:label="@string/rance10_save_transfer"
-            android:launchMode="singleTask"
-            android:taskAffinity="${applicationId}.saves" />
+            android:theme="@style/Rance10ManagementTheme" />
 
         <activity android:name=".GamepadMappingActivity"
             android:enabled="${saveTransferEnabled}"
-            android:exported="true"
+            android:exported="false"
             android:label="@string/rance10_gamepad_mapping"
+            android:theme="@style/Rance10ManagementTheme" />
+
+        <activity android:name=".Rance10LaunchOptionsActivity"
+            android:enabled="${saveTransferEnabled}"
+            android:exported="true"
+            android:label="@string/rance10_launch_options"
             android:launchMode="singleTask"
-            android:taskAffinity="${applicationId}.gamepad" />
+            android:theme="@style/Rance10ManagementTheme"
+            android:taskAffinity="${applicationId}.launchOptions" />
+
+        <receiver android:name=".Rance10ShortcutUpgradeReceiver"
+            android:enabled="${saveTransferEnabled}"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <activity android:name=".XSystem4Activity"
             android:label="@string/app_name"

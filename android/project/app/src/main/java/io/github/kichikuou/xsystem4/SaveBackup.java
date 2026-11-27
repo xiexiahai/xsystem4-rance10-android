@@ -22,7 +22,7 @@ import java.util.zip.ZipOutputStream;
 /** Portable backup of one flat Rance10 save profile. */
 final class SaveBackup {
     private static final String HEADER = "rance10-backup.txt";
-    private static final int MAX_FILES = 2048;
+    static final int MAX_FILES = 2048;
     private static final long MAX_BYTES = 2L << 30;
     private static final long MAX_ZIP_BYTES = MAX_BYTES + (4L << 20);
 
@@ -32,7 +32,7 @@ final class SaveBackup {
         }
     }
 
-    static int write(File profile, OutputStream destination, boolean cheats) throws IOException {
+    static int write(File profile, OutputStream destination, boolean cheats, boolean sunset) throws IOException {
         File[] files = profile.getCanonicalFile().listFiles();
         if (files == null || files.length == 0) throw new InvalidBackup("当前还没有可导出的存档。");
         if (files.length > MAX_FILES) throw new InvalidBackup("存档文件太多，无法导出。");
@@ -61,7 +61,7 @@ final class SaveBackup {
                 zip.closeEntry();
             }
             zip.putNextEntry(new ZipEntry(HEADER));
-            zip.write(header(cheats, files.length));
+            zip.write(header(cheats, sunset, files.length));
             zip.closeEntry();
         }
         return files.length;
@@ -73,7 +73,15 @@ final class SaveBackup {
         }
     }
 
-    static int extract(File archive, File staging, boolean cheats) throws IOException {
+    static long copySave(InputStream input, File destination, long copied) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(destination)) {
+            long total = copied + copy(input, output, MAX_BYTES - copied);
+            output.getFD().sync();
+            return total;
+        }
+    }
+
+    static int extract(File archive, File staging, boolean cheats, boolean sunset) throws IOException {
         String[] contents = staging.list();
         if (contents == null || contents.length != 0) throw new IOException("导入临时目录不可用。");
         try (ZipFile zip = new ZipFile(archive)) {
@@ -81,11 +89,11 @@ final class SaveBackup {
             if (count < 1 || count > MAX_FILES) throw new InvalidBackup("备份文件数量不正确。");
             ZipEntry metadata = zip.getEntry(HEADER);
             if (metadata == null) throw new InvalidBackup("请选择《兰斯10》导出的存档备份 ZIP。");
-            byte[] expectedHeader = header(cheats, count);
+            byte[] expectedHeader = header(cheats, sunset, count);
             try (InputStream input = zip.getInputStream(metadata)) {
                 for (byte expected : expectedHeader) {
                     if (input.read() != (expected & 0xff))
-                        throw new InvalidBackup("备份版本或游戏版本不匹配，请使用同一版导出的备份。");
+                        throw new InvalidBackup("备份与当前游戏版本不匹配，请确认应用版本和默认启动项。");
                 }
                 if (input.read() != -1) throw new InvalidBackup("备份标记不正确。");
             }
@@ -130,8 +138,9 @@ final class SaveBackup {
         return name.toLowerCase(Locale.ROOT).endsWith(".asd");
     }
 
-    private static byte[] header(boolean cheats, int count) {
-        return ("RANCE10-SAVE-1\n" + (cheats ? "cheat" : "normal") + "\n" + count + "\n")
+    private static byte[] header(boolean cheats, boolean sunset, int count) {
+        String profile = (cheats ? "cheat" : "normal") + (sunset ? "-sunset-049" : "");
+        return ("RANCE10-SAVE-1\n" + profile + "\n" + count + "\n")
                 .getBytes(StandardCharsets.US_ASCII);
     }
 

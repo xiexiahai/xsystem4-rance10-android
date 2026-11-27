@@ -30,15 +30,20 @@ class Rance10CheatPanel(
     private val activity: Activity,
     readFlags: () -> Int,
     writeFlags: (Int) -> Unit,
-    readCapabilities: () -> Int
+    readCapabilities: () -> Int,
+    foodRerollReady: () -> Boolean,
+    requestFoodReroll: () -> Boolean
 ) {
     private var root: FrameLayout? = null
     private var bubble: Button? = null
     private var panel: LinearLayout? = null
     private var status: TextView? = null
+    private var foodReroll: Button? = null
     private var flagsReader: (() -> Int)? = readFlags
     private var flagsWriter: ((Int) -> Unit)? = writeFlags
     private var capsReader: (() -> Int)? = readCapabilities
+    private var foodReadyReader: (() -> Boolean)? = foodRerollReady
+    private var foodRerollAction: (() -> Boolean)? = requestFoodReroll
     private val toggles = mutableListOf<Pair<CheckBox, Int>>()
     private val handler = Handler(Looper.getMainLooper())
     private val insets = Rect()
@@ -116,7 +121,9 @@ class Rance10CheatPanel(
             "我方HP不减少" to 1,
             "行动不消耗AP" to 2,
             "宝箱概率100%" to 4,
-            "食券使用不减／打火机重复使用" to 8
+            "食券使用不减／打火机重复使用" to 8,
+            "黄色敌人开战前不限换队次数" to 16,
+            "宝箱卡牌可逐张全领" to 64
         )) {
             val box = CheckBox(activity).apply {
                 text = label
@@ -142,6 +149,21 @@ class Rance10CheatPanel(
             }
             options.addView(box, LinearLayout.LayoutParams(-1, -2))
         }
+        val reroll = Button(activity).apply {
+            text = "食券 SL · 换一批"
+            textSize = 14f
+            isEnabled = false
+            setOnClickListener {
+                try {
+                    foodRerollAction?.invoke()
+                } catch (_: UnsatisfiedLinkError) {
+                    // A mismatched native build keeps the button disabled.
+                }
+                refresh()
+            }
+        }
+        foodReroll = reroll
+        options.addView(reroll, LinearLayout.LayoutParams(-1, -2))
         options.addView(text("全部隐藏后，长按音量＋恢复入口。", 11f))
         val footer = LinearLayout(activity).apply { gravity = Gravity.END }
         val collapse = Button(activity).apply {
@@ -298,7 +320,12 @@ class Rance10CheatPanel(
                 if (box.isChecked != checked) box.isChecked = checked
                 if (box.isEnabled != enabled) box.isEnabled = enabled
             }
-            val message = if (state.second == 0) "等待游戏就绪" else "开关重启后关闭"
+            foodReroll?.isEnabled = try {
+                state.second and 32 != 0 && foodReadyReader?.invoke() == true
+            } catch (_: UnsatisfiedLinkError) {
+                false
+            }
+            val message = if (state.second == 0) "等待游戏就绪" else "开关设置会自动保存"
             status?.let { if (it.text.toString() != message) it.text = message }
         } finally {
             syncing = false
@@ -325,9 +352,12 @@ class Rance10CheatPanel(
         bubble = null
         panel = null
         status = null
+        foodReroll = null
         flagsReader = null
         flagsWriter = null
         capsReader = null
+        foodReadyReader = null
+        foodRerollAction = null
         toggles.clear()
         syncing = false
     }

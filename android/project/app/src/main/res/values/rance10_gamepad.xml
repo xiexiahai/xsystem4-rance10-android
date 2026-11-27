@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="rance10_gamepad_mapping">手柄映射</string>
-    <string name="rance10_pad_instructions">点选操作可更换实体按键，两键会互换。保存后退出并重开游戏生效。</string>
+    <string name="rance10_pad_instructions">更换动作时会互换两个键的映射。保存后重新启动游戏生效。</string>
     <string name="rance10_pad_reset">恢复默认</string>
     <string name="rance10_pad_save">保存</string>
     <string name="rance10_pad_saved">设置已保存，重开游戏后生效</string>

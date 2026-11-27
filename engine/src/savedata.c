@@ -709,6 +709,10 @@ int load_globals_from_gsave(struct gsave *save, const char *keyname, const char 
 		VM_ERROR("Attempted to load save data with wrong group name: '%s'", display_sjis0(group_name));
 
 	for (struct gsave_global *g = save->globals; g < save->globals + save->nr_globals; g++) {
+		// The Windows v8 globals table also reserves unnamed entries for
+		// variables outside the selected group.
+		if (save->version == 8 && g->type == AIN_VOID && !g->value && !g->name[0])
+			continue;
 		int global_index = ain_get_global(ain, g->name);
 		if (global_index < 0) {
 			WARNING("invalid global name %s", display_sjis0(g->name));

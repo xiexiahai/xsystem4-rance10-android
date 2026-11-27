@@ -166,8 +166,6 @@ static bool flat_materialize(struct flat_prepared *p,struct parts_flat *next)
 		if (lib->type==FLAT_LIB_EMITTER) {
 			if (lib->emitter.end_pos_type!=0 && lib->emitter.end_pos_type!=1)
 				WARNING("flat: unsupported emitter end_pos_type %d",lib->emitter.end_pos_type);
-			if (lib->emitter.pos_track_mode==0)
-				WARNING("flat: unsupported emitter pos_track_mode %d",lib->emitter.pos_track_mode);
 		}
 	}
 	if (w<=0 || h<=0) {

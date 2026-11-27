@@ -352,11 +352,17 @@ static bool SystemService_GetMouseCursorConfig(int type, int *value)
 //bool SystemService_RunProgram(struct string *program_file_name, struct string *parameter);
 //bool SystemService_IsOpenedMutex(struct string *mutex_name);
 
-void SystemService_GetGameFolderPath(struct string **folder_path)
+static struct string *SystemService_GetGameFolderPathValue(void)
 {
 	char *sjis = utf2sjis(config.game_dir, 0);
-	*folder_path = make_string(sjis, strlen(sjis));
+	struct string *folder = cstr_to_string(sjis);
 	free(sjis);
+	return folder;
+}
+
+void SystemService_GetGameFolderPath(struct string **folder_path)
+{
+	*folder_path = SystemService_GetGameFolderPathValue();
 }
 
 static void SystemService_GetTime(int *hour, int *min, int *sec)
@@ -707,5 +713,14 @@ static void SystemService_PreLink(void)
 	if (fun && fun->nr_arguments == 1) {
 		static_library_replace(&lib_SystemService, "IsResetOnce",
 				SystemService_IsResetOnce_Drapeko);
+	}
+
+	fun = get_fun(libno, "GetGameFolderPath");
+	if (fun && fun->nr_arguments == 0 && fun->return_type.data == AIN_STRING) {
+		static_library_replace(&lib_SystemService, "GetGameFolderPath",
+				SystemService_GetGameFolderPathValue);
+	} else {
+		static_library_replace(&lib_SystemService, "GetGameFolderPath",
+				SystemService_GetGameFolderPath);
 	}
 }

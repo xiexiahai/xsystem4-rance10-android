@@ -114,6 +114,9 @@ union vm_value vm_copy(union vm_value v, enum ain_data_type type);
 void prepare_libraries(void);
 int vm_execute_ain(struct ain *program);
 void vm_call(int fno, int struct_page);
+#ifdef XSYSTEM4_RANCE10_CHEATS
+void r10mod_call_method(int fno, int struct_page, union vm_value argument);
+#endif
 size_t vm_active_frame_count(void);
 int vm_current_function_number(void);
 enum vm_gamepad_context { VM_PAD_MOUSE, VM_PAD_ORIGINAL, VM_PAD_KEY_MENU };

@@ -4,9 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.os.Bundle
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.view.Gravity
 import android.widget.TextView
 import android.widget.Toast
 
@@ -43,75 +41,85 @@ class GamepadMappingActivity : Activity() {
     private lateinit var bindings: IntArray
     private lateinit var physicalNames: Array<String>
     private lateinit var actionNames: Array<String>
-    private val rows = mutableMapOf<Int, Button>()
+    private lateinit var diagram: Rance10PadDiagram
+    private lateinit var summary: TextView
+    private var selectedButton: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = getString(R.string.rance10_gamepad_mapping)
         bindings = savedInstanceState?.getIntArray("bindings") ?: Rance10GamepadMapping.load(this)
+        selectedButton = savedInstanceState?.getInt("selected", -1)?.takeIf { it >= 0 }
         physicalNames = resources.getStringArray(R.array.rance10_pad_physical)
         actionNames = resources.getStringArray(R.array.rance10_pad_actions)
 
-        val screen = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val inset = (16 * resources.displayMetrics.density).toInt()
-            setPadding(inset, inset, inset, inset)
+        val ui = Rance10ManagementUi(this)
+        val page = ui.page(getString(R.string.rance10_gamepad_mapping), getString(R.string.rance10_pad_instructions))
+        val card = ui.card()
+        diagram = Rance10PadDiagram(this, ui) { chooseAction(it) }
+        ui.add(card, diagram, 0)
+        summary = ui.text("", 14, Rance10ManagementUi.ACCENT).apply {
+            gravity = Gravity.CENTER
+            accessibilityLiveRegion = TextView.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        list.addView(TextView(this).apply { setText(R.string.rance10_pad_instructions) })
-        for (action in Rance10GamepadMapping.editableActions) {
-            val row = Button(this).apply {
-                isAllCaps = false
-                setOnClickListener { chooseButton(action) }
-            }
-            rows[action] = row
-            list.addView(row)
+        ui.add(card, summary)
+        ui.add(card, ui.button("查看全部映射") { showBindings() }, 12)
+        ui.add(page, card, 20)
+
+        val reset = ui.button(getString(R.string.rance10_pad_reset)) {
+            bindings = Rance10GamepadMapping.defaults()
+            updateDiagram()
         }
-        screen.addView(ScrollView(this).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
-        val controls = LinearLayout(this)
-        controls.addView(Button(this).apply {
-            setText(R.string.rance10_pad_reset)
-            setOnClickListener { bindings = Rance10GamepadMapping.defaults(); updateRows() }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        controls.addView(Button(this).apply {
-            setText(R.string.rance10_pad_save)
-            setOnClickListener {
-                if (Rance10GamepadMapping.save(this@GamepadMappingActivity, bindings)) {
-                    Toast.makeText(context, R.string.rance10_pad_saved, Toast.LENGTH_SHORT).show()
-                    finish()
-                } else {
-                    Toast.makeText(context, R.string.rance10_pad_save_failed, Toast.LENGTH_LONG).show()
-                }
+        val save = ui.button(getString(R.string.rance10_pad_save), primary = true) {
+            if (Rance10GamepadMapping.save(this, bindings)) {
+                Toast.makeText(this, R.string.rance10_pad_saved, Toast.LENGTH_SHORT).show()
+                finish()
+            } else {
+                Toast.makeText(this, R.string.rance10_pad_save_failed, Toast.LENGTH_LONG).show()
             }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        screen.addView(controls)
-        setContentView(screen)
-        updateRows()
+        }
+        ui.add(page, ui.row(reset, save), 14)
+        updateDiagram()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putIntArray("bindings", bindings)
+        outState.putInt("selected", selectedButton ?: -1)
         super.onSaveInstanceState(outState)
     }
 
-    private fun chooseButton(action: Int) {
+    private fun chooseAction(physical: Int) {
         val options = Rance10GamepadMapping.editableActions
-        val selected = bindings.indexOf(action)
+        selectedButton = physical
+        updateDiagram()
         AlertDialog.Builder(this)
-            .setTitle(actionNames[action])
-            .setSingleChoiceItems(options.map { physicalNames[it] }.toTypedArray(), options.indexOf(selected)) { dialog, index ->
-                val physical = options[index]
-                bindings[selected] = bindings[physical]
+            .setTitle("为 ${physicalNames[physical]} 选择动作")
+            .setSingleChoiceItems(options.map { actionNames[it] }.toTypedArray(), options.indexOf(bindings[physical])) { dialog, index ->
+                val action = options[index]
+                val otherButton = bindings.indexOf(action)
+                bindings[otherButton] = bindings[physical]
                 bindings[physical] = action
-                updateRows()
+                updateDiagram()
                 dialog.dismiss()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
-    private fun updateRows() {
-        for ((action, row) in rows)
-            row.text = getString(R.string.rance10_pad_binding, actionNames[action], physicalNames[bindings.indexOf(action)])
+    private fun showBindings() {
+        val options = Rance10GamepadMapping.editableActions
+        AlertDialog.Builder(this)
+            .setTitle("当前映射")
+            .setItems(options.map(::bindingLabel).toTypedArray()) { _, index -> chooseAction(options[index]) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun bindingLabel(physical: Int) =
+        getString(R.string.rance10_pad_binding, physicalNames[physical], actionNames[bindings[physical]])
+
+    private fun updateDiagram() {
+        for (physical in Rance10GamepadMapping.editableActions)
+            diagram.updateButton(physical, bindingLabel(physical), bindings[physical] != physical)
+        summary.text = selectedButton?.let(::bindingLabel) ?: "点选图中的实体键，查看或更改动作"
     }
 }

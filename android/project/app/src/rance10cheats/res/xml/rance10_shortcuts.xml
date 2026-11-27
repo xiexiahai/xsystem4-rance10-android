@@ -1,20 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
     <shortcut
-        android:shortcutId="rance10-save-transfer"
-        android:enabled="@bool/rance10_save_shortcut_enabled"
-        android:icon="@mipmap/ic_launcher"
-        android:shortcutShortLabel="@string/rance10_save_transfer">
+        android:shortcutId="rance10-launch-options"
+        android:enabled="@bool/rance10_launch_shortcut_enabled"
+        android:icon="@drawable/ic_rance10_launch_options"
+        android:shortcutShortLabel="@string/rance10_launch_options">
         <intent android:action="android.intent.action.VIEW"
-            android:targetClass="io.github.kichikuou.xsystem4.SaveTransferActivity"
-            android:targetPackage="io.github.xiexiahai.rance10.cheats" />
-    </shortcut>
-    <shortcut android:shortcutId="rance10-gamepad"
-        android:enabled="@bool/rance10_save_shortcut_enabled"
-        android:icon="@mipmap/ic_launcher"
-        android:shortcutShortLabel="@string/rance10_gamepad_mapping">
-        <intent android:action="android.intent.action.VIEW"
-            android:targetClass="io.github.kichikuou.xsystem4.GamepadMappingActivity"
+            android:targetClass="io.github.kichikuou.xsystem4.Rance10LaunchOptionsActivity"
             android:targetPackage="io.github.xiexiahai.rance10.cheats" />
     </shortcut>
 </shortcuts>
